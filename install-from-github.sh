@@ -71,6 +71,13 @@ command -v apk >/dev/null 2>&1 || {
 
 mkdir -p "$WORKDIR"
 
+gh_api() {
+	curl -fsSL --retry 3 \
+		-H "Authorization: Bearer $GITHUB_TOKEN" \
+		-H "Accept: application/vnd.github+json" \
+		-o "$2" "$1"
+}
+
 gh_get() {
 	curl -fsSL --retry 3 \
 		-H "Authorization: Bearer $GITHUB_TOKEN" \
@@ -87,7 +94,7 @@ $BASE/$CORE251_NAME
 $BASE/$SUMS_NAME"
 else
 	echo 'Запрашиваю последний релиз GitHub...'
-	gh_get "https://api.github.com/repos/$REPO/releases/latest" "$WORKDIR/.release.json"
+	gh_api "https://api.github.com/repos/$REPO/releases/latest" "$WORKDIR/.release.json"
 	TAG=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$WORKDIR/.release.json" | head -n1)
 	echo "Релиз: ${TAG:-неизвестно}"
 	URLS=$(sed -n 's/.*"browser_download_url": *"\([^"]*\)".*/\1/p' "$WORKDIR/.release.json")
