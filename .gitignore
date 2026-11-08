@@ -1,0 +1,18 @@
+# Build artifacts
+core219/target-final/
+core251/target-final/
+core219/tools/
+core251/tools/
+core219/dist/
+core251/dist/
+core219/source/core/target/
+core251/source/core/target/
+core*/source/core/target/
+core*/target/
+
+# Logs
+*.log
+
+# OS/editor
+Thumbs.db
+.DS_Store

@@ -1,0 +1,220 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+CSQTT_BIN=""
+SELECTED_PROFILE=""
+SELECTED_PRIORITY=2147483647
+
+# Разрешение бинарника ядра по UCI csqtt.main.core_version:
+#   auto (по умолчанию) - предпочесть 2.5.0, затем 2.1.9, затем legacy /usr/bin/csqtt-core;
+#   2.1.9               - только /usr/libexec/csqtt/csqtt-core-2.1.9;
+#   2.5.0 / 2.5.1       - только /usr/libexec/csqtt/csqtt-core-2.5.0.
+resolve_core() {
+	local pref
+	config_get pref main core_version auto
+	case "$pref" in
+		2.1.9)
+			CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.1.9" ;;
+		2.5.0|2.5.1)
+			CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.5.0" ;;
+		*)
+			if [ -x /usr/libexec/csqtt/csqtt-core-2.5.0 ]; then
+				CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.5.0"
+			elif [ -x /usr/libexec/csqtt/csqtt-core-2.1.9 ]; then
+				CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.1.9"
+			else
+				CSQTT_BIN="/usr/bin/csqtt-core"
+			fi ;;
+	esac
+}
+
+append_value() {
+	local flag="$1"
+	local value="$2"
+	[ -n "$value" ] && procd_append_param command "$flag" "$value"
+}
+
+append_switch() {
+	local flag="$1"
+	local value="$2"
+	[ "$value" = "1" ] && procd_append_param command "$flag"
+}
+
+consider_profile() {
+	local section="$1"
+	local enabled priority peer password
+	config_get_bool enabled "$section" enabled 1
+	[ "$enabled" = "1" ] || return 0
+	config_get peer "$section" peer
+	config_get password "$section" password
+	[ -n "$peer" ] && [ -n "$password" ] || return 0
+	config_get priority "$section" priority 100
+	case "$priority" in ''|*[!0-9]*) priority=100;; esac
+	if [ -z "$SELECTED_PROFILE" ] || [ "$priority" -lt "$SELECTED_PRIORITY" ]; then
+		SELECTED_PROFILE="$section"
+		SELECTED_PRIORITY="$priority"
+	fi
+}
+
+select_profile() {
+	local mode active type enabled
+	config_get mode main selection_mode manual
+	config_get active main active_profile
+	if [ "$mode" = "manual" ] && [ -n "$active" ]; then
+		config_get type "$active" TYPE
+		config_get_bool enabled "$active" enabled 1
+		if [ "$type" = "server" ] && [ "$enabled" = "1" ]; then
+			SELECTED_PROFILE="$active"
+			return 0
+		fi
+	fi
+	config_foreach consider_profile server
+	[ -n "$SELECTED_PROFILE" ]
+}
+
+start_service() {
+	config_load csqtt
+	resolve_core
+	[ -x "$CSQTT_BIN" ] || {
+		echo "csqtt: $CSQTT_BIN is missing or not executable" >&2
+		return 1
+	}
+
+	local enabled peer password vk workers runtime_threads listen ifname tun_mtu no_tun
+	local obfs turn_transport srtp_mode fingerprint captcha_mode vk_hash_mode vk_auth_mode
+	local client_ids turn turn_port custom_turn_ips exact_workers startup_wait
+	local domain_routing exclude_ru_zones template_domains domain_whitelist direct_domains
+	local ip_routing ip_whitelist direct_ips vk_js_token
+
+	config_get_bool enabled main enabled 0
+	[ "$enabled" = "1" ] || {
+		echo "csqtt: disabled in /etc/config/csqtt" >&2
+		return 1
+	}
+
+	select_profile || {
+		echo "csqtt: no enabled and complete server profile" >&2
+		return 1
+	}
+
+	config_get peer "$SELECTED_PROFILE" peer
+	[ -n "$peer" ] || config_get peer main peer
+	config_get password "$SELECTED_PROFILE" password
+	[ -n "$password" ] || config_get password main password
+	config_get workers "$SELECTED_PROFILE" workers
+	[ -n "$workers" ] || config_get workers main workers 9
+	config_get obfs "$SELECTED_PROFILE" obfs
+	[ -n "$obfs" ] || config_get obfs main obfs unified
+	config_get turn_transport "$SELECTED_PROFILE" turn_transport
+	[ -n "$turn_transport" ] || config_get turn_transport main turn_transport udp
+	config_get fingerprint "$SELECTED_PROFILE" fingerprint
+	[ -n "$fingerprint" ] || config_get fingerprint main fingerprint chrome
+	config_get captcha_mode "$SELECTED_PROFILE" captcha_mode
+	[ -n "$captcha_mode" ] || config_get captcha_mode main captcha_mode auto
+	config_get vk main vk
+	config_get vk_js_token main vk_js_token
+	config_get runtime_threads main runtime_threads 0
+	config_get listen main listen 127.0.0.1:9000
+	config_get ifname main ifname csqtt0
+	config_get tun_mtu main tun_mtu 1300
+	config_get_bool no_tun main no_tun 0
+	config_get srtp_mode main srtp_mode auto
+	config_get vk_hash_mode main vk_hash_mode manual
+	config_get vk_auth_mode main vk_auth_mode vkcalls
+	config_get client_ids main client_ids
+	config_get turn main turn
+	config_get turn_port main turn_port
+	config_get custom_turn_ips main custom_turn_ips
+	config_get_bool exact_workers main exact_workers 0
+	config_get_bool domain_routing main domain_routing 0
+	config_get_bool exclude_ru_zones main exclude_ru_zones 0
+	config_get_bool template_domains main template_domains 0
+	config_get_bool domain_whitelist main domain_whitelist 0
+	config_get direct_domains main direct_domains
+	config_get_bool ip_routing main ip_routing 0
+	config_get_bool ip_whitelist main ip_whitelist 0
+	config_get direct_ips main direct_ips
+	config_get startup_wait main startup_wait 180
+
+	[ -n "$peer" ] || { echo "csqtt: peer is required" >&2; return 1; }
+	[ -n "$password" ] || { echo "csqtt: password is required" >&2; return 1; }
+	if [ "$vk_hash_mode" = "auto_js" ]; then
+		[ -n "$vk_js_token" ] || { echo "csqtt: VK JS token is required for auto_js" >&2; return 1; }
+		case "$vk_js_token" in *[!A-Za-z0-9._-]*) echo "csqtt: VK JS token contains unsupported characters" >&2; return 1;; esac
+	else
+		[ -n "$vk" ] || { echo "csqtt: VK hash is required" >&2; return 1; }
+	fi
+
+	case "$workers" in ''|*[!0-9]*) echo "csqtt: workers must be an integer" >&2; return 1;; esac
+	[ "$workers" -ge 3 ] && [ "$workers" -le 100 ] || { echo "csqtt: workers must be between 3 and 100" >&2; return 1; }
+	case "$runtime_threads" in ''|*[!0-9]*) echo "csqtt: runtime_threads must be an integer" >&2; return 1;; esac
+	case "$tun_mtu" in ''|*[!0-9]*) echo "csqtt: tun_mtu must be an integer" >&2; return 1;; esac
+	case "$startup_wait" in ''|*[!0-9]*) echo "csqtt: startup_wait must be an integer" >&2; return 1;; esac
+	[ "$tun_mtu" -ge 576 ] && [ "$tun_mtu" -le 9000 ] || { echo "csqtt: tun_mtu must be between 576 and 9000" >&2; return 1; }
+	case "$ifname" in ''|*[!A-Za-z0-9_.-]*) echo "csqtt: invalid TUN interface name" >&2; return 1;; esac
+	[ "${#ifname}" -le 15 ] || { echo "csqtt: TUN interface name is too long" >&2; return 1; }
+
+	[ -e /dev/net/tun ] || modprobe tun 2>/dev/null
+	[ -e /dev/net/tun ] || { echo "csqtt: /dev/net/tun is unavailable" >&2; return 1; }
+
+	procd_open_instance main
+	procd_set_param command /usr/libexec/csqtt/run-core.sh "$CSQTT_BIN"
+	procd_append_param command \
+		--peer "$peer" \
+		--vk "$vk" \
+		--workers "$workers" \
+		--runtime-threads "$runtime_threads" \
+		--listen "$listen" \
+		--tun "$ifname" \
+		--tun-mtu "$tun_mtu" \
+		--obfs "$obfs" \
+		--turn-transport "$turn_transport" \
+		--srtp-mode "$srtp_mode" \
+		--fingerprint "$fingerprint" \
+		--captcha-mode "$captcha_mode" \
+		--vk-hash-mode "$vk_hash_mode" \
+		--vk-auth-mode "$vk_auth_mode" \
+		--ignore-stdin-eof
+
+	append_value --client-ids "$client_ids"
+	append_value --turn "$turn"
+	append_value --port "$turn_port"
+	append_value --custom-turn-ips "$custom_turn_ips"
+	append_value --direct-domains "$direct_domains"
+	append_value --direct-ips "$direct_ips"
+	append_switch --no-tun "$no_tun"
+	append_switch --exact-workers "$exact_workers"
+	append_switch --domain-routing "$domain_routing"
+	append_switch --exclude-ru-zones "$exclude_ru_zones"
+	append_switch --template-domains "$template_domains"
+	append_switch --domain-whitelist "$domain_whitelist"
+	append_switch --ip-routing "$ip_routing"
+	append_switch --ip-whitelist "$ip_whitelist"
+
+	procd_set_param env \
+		"CSQTT_PASSWORD=$password" \
+		"CSQTT_EVENTS=1" \
+		"CSQTT_ACTIVE_PROFILE=$SELECTED_PROFILE" \
+		"CSQTT_VK_JS_TOKEN=$vk_js_token" \
+		"CSQTT_STARTUP_WAIT=$startup_wait" \
+		"RUST_BACKTRACE=0"
+	# Wait for the uplink and keep retrying after transient boot failures.
+	procd_set_param respawn 60 10 0
+	procd_set_param term_timeout 10
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/csqtt
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger csqtt
+}
+
+reload_service() {
+	stop
+	start
+}

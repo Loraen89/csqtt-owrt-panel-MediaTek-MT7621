@@ -1,0 +1,585 @@
+'use strict';
+
+import * as fs from "fs";
+
+const BIN = "/usr/bin/csqtt-core";
+const BIN_250 = "/usr/libexec/csqtt/csqtt-core-2.5.0";
+const BIN_219 = "/usr/libexec/csqtt/csqtt-core-2.1.9";
+const INIT = "/etc/init.d/csqtt";
+const UCI = "/sbin/uci";
+const LOGREAD = "/sbin/logread";
+const STATUS_PATH = "/var/run/csqtt/status.json";
+const LOG_PATH = "/var/log/csqtt.log";
+const IFNAME_RE = regexp("^[A-Za-z0-9_.-]{1,15}$");
+const PROFILE_RE = regexp("^[A-Za-z0-9_]+$");
+const TRAIL_NL = regexp("[\r\n]+$");
+const PROFILE_SAFE = ["name", "enabled", "priority", "peer", "workers",
+	"obfs", "turn_transport", "captcha_mode", "fingerprint", "note"];
+
+function shellquote(value) {
+	return "'" + replace("" + value, "'", "'\\''") + "'";
+}
+
+function run(argv) {
+	let command = "";
+	for (let i = 0; i < length(argv); i++) {
+		if (i > 0) command += " ";
+		command += shellquote(argv[i]);
+	}
+	let proc = fs.popen(command + " 2>&1", "r");
+	if (proc == null)
+		return { code: -1, out: "unable to execute command" };
+	let output = "", line;
+	while ((line = proc.read("line")) != null) {
+		output += line;
+		if (length(output) > 524288)
+			output = substr(output, length(output) - 524288, 524288);
+	}
+	return { code: proc.close(), out: output };
+}
+
+function clean(value) {
+	return trim(replace(value == null ? "" : "" + value, TRAIL_NL, ""));
+}
+
+function parseJson(text) {
+	try { return json(text); } catch (e) { return null; }
+}
+
+function readText(path) {
+	try { return fs.readfile(path); } catch (e) { return null; }
+}
+
+function readNumber(path) {
+	let value = readText(path);
+	return value == null ? 0 : int(clean(value));
+}
+
+function fileExists(path) {
+	try { return fs.stat(path) != null; } catch (e) { return false; }
+}
+
+function uciUnquote(value) {
+	if (length(value) >= 2 && substr(value, 0, 1) == "'" && substr(value, length(value) - 1, 1) == "'")
+		value = substr(value, 1, length(value) - 2);
+	return replace(value, "'\\''", "'");
+}
+
+function uciConfig() {
+	let result = run([UCI, "show", "csqtt"]);
+	if (result.code != 0)
+		return null;
+	let cfg = {}, prefix = "csqtt.";
+	let lines = split(replace(result.out, TRAIL_NL, ""), "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let line = lines[i];
+		if (substr(line, 0, length(prefix)) != prefix)
+			continue;
+		line = substr(line, length(prefix));
+		let eq = index(line, "=");
+		if (eq < 0) continue;
+		let key = substr(line, 0, eq), value = substr(line, eq + 1);
+		let dot = index(key, ".");
+		if (dot < 0) {
+			if (cfg[key] == null) cfg[key] = {};
+			cfg[key][".type"] = value;
+		} else {
+			let section = substr(key, 0, dot), option = substr(key, dot + 1);
+			if (cfg[section] == null) cfg[section] = {};
+			cfg[section][option] = uciUnquote(value);
+		}
+	}
+	return cfg;
+}
+
+function uciSet(section, option, value) {
+	return run([UCI, "set", "csqtt." + section + "." + option + "=" + value]).code == 0;
+}
+
+function uciDelete(section) {
+	return run([UCI, "delete", "csqtt." + section]).code == 0;
+}
+
+function uciCommit() {
+	return run([UCI, "commit", "csqtt"]);
+}
+
+function validProfile(id) {
+	return type(id) == "string" && match(id, PROFILE_RE) != null && id != "main" && id != "routing";
+}
+
+function mainValue(cfg, key, fallback) {
+	let main = cfg != null ? cfg.main : null;
+	return main != null && main[key] != null && main[key] != "" ? "" + main[key] : fallback;
+}
+
+function profileValue(cfg, id, key, fallback) {
+	let section = cfg != null ? cfg[id] : null;
+	if (section != null && section[key] != null && section[key] != "")
+		return "" + section[key];
+	return mainValue(cfg, key, fallback);
+}
+
+function configuredProfile(section) {
+	return section != null && section.peer != null && section.peer != "" && section.password != null && section.password != "";
+}
+
+function chooseProfile(cfg) {
+	if (cfg == null || cfg.main == null)
+		return "";
+	let mode = mainValue(cfg, "selection_mode", "manual");
+	let active = mainValue(cfg, "active_profile", "");
+	if (mode == "manual" && validProfile(active) && cfg[active] != null &&
+		cfg[active][".type"] == "server" && cfg[active].enabled != "0" && configuredProfile(cfg[active]))
+		return active;
+	let best = "", bestPriority = 2147483647;
+	for (let id in cfg) {
+		let section = cfg[id];
+		if (section == null || section[".type"] != "server" || section.enabled == "0" || !configuredProfile(section))
+			continue;
+		let priority = int(section.priority != null ? section.priority : 100);
+		if (best == "" || priority < bestPriority) {
+			best = id;
+			bestPriority = priority;
+		}
+	}
+	return best;
+}
+
+function safeProfiles(cfg, runtimeActive, running) {
+	let profiles = [];
+	if (cfg == null) return profiles;
+	for (let id in cfg) {
+		let section = cfg[id];
+		if (section == null || section[".type"] != "server") continue;
+		let profile = { id: id };
+		for (let i = 0; i < length(PROFILE_SAFE); i++) {
+			let key = PROFILE_SAFE[i];
+			if (section[key] != null) profile[key] = "" + section[key];
+		}
+		if (section.enabled == "0")
+			profile.state = "disabled";
+		else if (running && id == runtimeActive)
+			profile.state = "active";
+		else if (configuredProfile(section))
+			profile.state = "ready";
+		else
+			profile.state = "failed";
+		push(profiles, profile);
+	}
+	return profiles;
+}
+
+function resolveBin() {
+	// Приоритет как в init.d resolve_core: сначала UCI csqtt.main.core_version,
+	// затем 2.5.0 -> 2.1.9 -> legacy /usr/bin/csqtt-core.
+	let pref = "";
+	let r = run([UCI, "-q", "get", "csqtt.main.core_version"]);
+	if (r.code == 0)
+		pref = clean(r.out);
+	if (pref == "2.1.9")
+		return BIN_219;
+	if (pref == "2.5.0" || pref == "2.5.1")
+		return BIN_250;
+	if (fileExists(BIN_250))
+		return BIN_250;
+	if (fileExists(BIN_219))
+		return BIN_219;
+	return BIN;
+}
+
+function binaryVersion() {
+	let result = run([resolveBin(), "--version"]);
+	return result.code == 0 ? clean(result.out) : "unavailable";
+}
+
+function processInfo() {
+	let pid = "";
+	for (let name of [ "csqtt-core-2.5.0", "csqtt-core-2.1.9", "csqtt-core" ]) {
+		let result = run(["/bin/pidof", name]);
+		if (result.code == 0 && clean(result.out) != "") {
+			pid = clean(result.out);
+			break;
+		}
+	}
+	if (index(pid, " ") >= 0)
+		pid = split(pid, " ")[0];
+	return { running: pid != "", pid: pid };
+}
+
+function statusObject() {
+	let cfg = uciConfig();
+	let proc = processInfo();
+	let main = cfg != null ? cfg.main : null;
+	let ifname = mainValue(cfg, "ifname", "csqtt0");
+	let active = chooseProfile(cfg);
+	let raw = parseJson(readText(STATUS_PATH));
+	let status = raw != null ? raw : {};
+	let interfaceUp = match(ifname, IFNAME_RE) != null && fileExists("/sys/class/net/" + ifname);
+	let rx = interfaceUp ? readNumber("/sys/class/net/" + ifname + "/statistics/rx_bytes") : 0;
+	let tx = interfaceUp ? readNumber("/sys/class/net/" + ifname + "/statistics/tx_bytes") : 0;
+	let workers = profileValue(cfg, active, "workers", mainValue(cfg, "workers", "9"));
+	let connected = false;
+	if (proc.running && raw != null && raw.connectivity != null)
+		connected = raw.connectivity.session_established == true;
+
+	status.version = binaryVersion();
+	status.daemon_state = proc.running ? "running" : "stopped";
+	status.generated_at = time();
+	status.selection_mode = mainValue(cfg, "selection_mode", "manual");
+	status.active_profile = active != "" ? active : mainValue(cfg, "active_profile", "");
+	status.profiles = safeProfiles(cfg, active, proc.running);
+	status.tunnel = {
+		interface: ifname,
+		address: mainValue(cfg, "tun_address", ""),
+		mtu: int(mainValue(cfg, "tun_mtu", "1300")),
+		dns: mainValue(cfg, "dns", "")
+	};
+	status.workers = {
+		configured: int(workers),
+		active: (proc.running && raw != null && raw.workers != null && raw.workers.active != null) ? raw.workers.active : 0
+	};
+	status.connectivity = {
+		process_running: proc.running,
+		tun_present: interfaceUp,
+		session_established: connected,
+		transfer_observed: proc.running && (rx > 0 || tx > 0),
+		access_verified: false,
+		stage: !proc.running ? "stopped" : (connected ? "connected" : "connecting"),
+		access_state: !proc.running ? "not_running" : (interfaceUp ? "waiting" : "unavailable"),
+		session_age_secs: (proc.running && raw != null && raw.uptime_secs != null) ? raw.uptime_secs : 0
+	};
+	status.rx_bytes = rx;
+	status.tx_bytes = tx;
+	status.reconnects = raw != null && raw.reconnects != null ? raw.reconnects : 0;
+	if (status.resources == null) status.resources = {};
+	return {
+		instance: "main",
+		code: connected ? 0 : (proc.running ? 1 : 2),
+		running: proc.running,
+		connected: connected,
+		pid: proc.pid,
+		enabled: main != null && main.enabled == "1",
+		boot_enabled: run([INIT, "enabled"]).code == 0,
+		configured: active != "" && mainValue(cfg, "vk", "") != "",
+		interface: ifname,
+		interface_up: interfaceUp,
+		binary_ok: status.version != "unavailable",
+		status: status
+	};
+}
+
+function mStatus(req) {
+	return statusObject();
+}
+
+function mService(req) {
+	let action = req.args.action;
+	if (action != "start" && action != "stop" && action != "restart" && action != "reload")
+		return { ok: false, code: -1, error: "action: start|stop|restart|reload" };
+	let result = run([INIT, action]);
+	let status = statusObject();
+	let ok = result.code == 0;
+	if ((action == "start" || action == "restart" || action == "reload") && !status.running)
+		ok = false;
+	if (action == "stop" && status.running)
+		ok = false;
+	return { ok: ok, instance: "main", action: action, code: result.code,
+		output: clean(result.out), status: status };
+}
+
+function tailLines(lines, count) {
+	let out = [], from = length(lines) > count ? length(lines) - count : 0;
+	for (let i = from; i < length(lines); i++)
+		if (lines[i] != "") push(out, lines[i]);
+	return out;
+}
+
+function filterLines(lines, pattern) {
+	if (pattern == null || pattern == "") return lines;
+	let expression;
+	try { expression = regexp(pattern, "i"); } catch (e) { return null; }
+	let out = [];
+	for (let i = 0; i < length(lines); i++)
+		if (match(lines[i], expression) != null) push(out, lines[i]);
+	return out;
+}
+
+function mLogs(req) {
+	let source = req.args.source != null ? req.args.source : "file";
+	let count = int(req.args.lines != null ? req.args.lines : 100);
+	if (count < 1) count = 1;
+	if (count > 2000) count = 2000;
+	let text = null;
+	if (source == "file") text = readText(LOG_PATH);
+	if (source == "syslog" || text == null) {
+		let result = run([LOGREAD, "-e", "csqtt"]);
+		text = result.out;
+		source = "syslog";
+	}
+	let lines = tailLines(split(replace(text == null ? "" : text, TRAIL_NL, ""), "\n"), count);
+	lines = filterLines(lines, req.args.grep);
+	if (lines == null) return { error: "invalid grep expression", lines: [] };
+	return { instance: "main", source: source, count: length(lines), lines: lines };
+}
+
+function mLogsClear(req) {
+	let size = 0;
+	try { let stat = fs.stat(LOG_PATH); if (stat != null) size = stat.size; } catch (e) {}
+	let file;
+	try { file = fs.open(LOG_PATH, "w"); } catch (e) { file = null; }
+	if (file == null) return { ok: true, cleared_bytes: 0, note: "syslog is managed by logd" };
+	file.close();
+	return { ok: true, cleared_bytes: size };
+}
+
+function addCheck(checks, name, status, message) {
+	push(checks, { name: name, status: status, message: message });
+}
+
+function configurationReport() {
+	let cfg = uciConfig(), checks = [], failures = 0, warnings = 0;
+	let version = binaryVersion();
+	if (version == "unavailable") { addCheck(checks, "CSQTT core", "fail", "binary is unavailable"); failures++; }
+	else addCheck(checks, "CSQTT core", "ok", version);
+	if (fileExists("/dev/net/tun")) addCheck(checks, "TUN device", "ok", "/dev/net/tun is available");
+	else { addCheck(checks, "TUN device", "fail", "/dev/net/tun is missing"); failures++; }
+	let active = chooseProfile(cfg);
+	if (active == "") { addCheck(checks, "Server profile", "fail", "no enabled profile with peer and password"); failures++; }
+	else addCheck(checks, "Server profile", "ok", active);
+	let hashMode = mainValue(cfg, "vk_hash_mode", "manual");
+	let vkReady = hashMode == "auto_js" ? mainValue(cfg, "vk_js_token", "") != "" : mainValue(cfg, "vk", "") != "";
+	if (vkReady) addCheck(checks, "VK credentials", "ok", hashMode);
+	else { addCheck(checks, "VK credentials", "fail", hashMode == "auto_js" ? "VK JS token is empty" : "VK hashes are empty"); failures++; }
+	if (mainValue(cfg, "failover", "0") == "1") { addCheck(checks, "Runtime failover", "warn", "the 2.5.0 single-profile core applies priority only on service start"); warnings++; }
+	else addCheck(checks, "Runtime failover", "ok", "disabled; profile selection is deterministic");
+	addCheck(checks, "Network isolation", "ok", "the package does not modify firewall, routes or system DNS");
+	return { ok: failures == 0, code: failures > 0 ? 2 : (warnings > 0 ? 1 : 0),
+		report: { checks: checks, compatibility: "MediaTek MT7621 / mipsel_24kc / cores 2.1.9+2.5.1" } };
+}
+
+function mTestConf(req) {
+	let report = configurationReport();
+	report.instance = "main";
+	return report;
+}
+
+function mDiag(req) {
+	let cfg = uciConfig(), status = statusObject(), report = configurationReport();
+	let safeMain = {};
+	let keys = ["enabled", "ifname", "selection_mode", "active_profile", "failover",
+		"failback", "health_mode", "captcha_policy", "vk_hash_mode", "vk_auth_mode",
+		"workers", "obfs", "turn_transport", "fingerprint", "tun_mtu"];
+	for (let i = 0; i < length(keys); i++)
+		safeMain[keys[i]] = mainValue(cfg, keys[i], "");
+	let profiles = [];
+	let all = safeProfiles(cfg, chooseProfile(cfg), status.running);
+	for (let i = 0; i < length(all); i++)
+		push(profiles, { id: all[i].id, name: all[i].name, enabled: all[i].enabled,
+			priority: all[i].priority, state: all[i].state });
+	let logs = mLogs({ args: { source: "syslog", lines: 100, grep: "" } });
+	return { ok: true, instance: "main", bundle: {
+		kind: "csqtt-mt7621-diagnostics", schema: 2, version: binaryVersion(),
+		device: clean(readText("/proc/device-tree/model")), config: safeMain,
+		profiles: profiles, status: status.status, doctor: report.report,
+		log_tail: logs.lines, complete: true,
+		notes: ["Secrets and server addresses are intentionally omitted"]
+	} };
+}
+
+function mProfiles(req) {
+	let cfg = uciConfig();
+	if (cfg == null) return { error: "UCI config is unavailable", profiles: [] };
+	return {
+		instance: "main",
+		ifname: mainValue(cfg, "ifname", "csqtt0"),
+		selection_mode: mainValue(cfg, "selection_mode", "manual"),
+		active_profile: mainValue(cfg, "active_profile", ""),
+		schema_version: mainValue(cfg, "schema_version", "2"),
+		legacy_shared: [],
+		profiles: safeProfiles(cfg, chooseProfile(cfg), processInfo().running)
+	};
+}
+
+function applyIfRunning(wasRunning) {
+	if (!wasRunning) return true;
+	let result = run([INIT, "restart"]);
+	return result.code == 0 && processInfo().running;
+}
+
+function mProfileAction(req) {
+	let action = req.args.action, id = req.args.id;
+	let cfg = uciConfig(), wasRunning = processInfo().running;
+	if (action == "auto") {
+		if (!uciSet("main", "selection_mode", "priority")) return { ok: false, error: "UCI write failed" };
+	} else {
+		if (!validProfile(id) || cfg == null || cfg[id] == null || cfg[id][".type"] != "server")
+			return { ok: false, error: "invalid profile id" };
+		if (action == "use") {
+			uciSet(id, "enabled", "1");
+			uciSet("main", "active_profile", id);
+			uciSet("main", "selection_mode", "manual");
+		} else if (action == "enable") {
+			uciSet(id, "enabled", "1");
+		} else if (action == "disable") {
+			uciSet(id, "enabled", "0");
+		} else if (action == "remove") {
+			if (!uciDelete(id)) return { ok: false, error: "profile removal failed" };
+			if (mainValue(cfg, "active_profile", "") == id) uciSet("main", "active_profile", "");
+		} else {
+			return { ok: false, error: "action: use|auto|enable|disable|remove" };
+		}
+	}
+	let commit = uciCommit();
+	if (commit.code != 0) return { ok: false, code: commit.code, output: clean(commit.out) };
+	let applied = applyIfRunning(wasRunning);
+	return { ok: true, instance: "main", action: action, code: 0, applied: applied };
+}
+
+function percentEncode(value) {
+	let encoded = "" + value;
+	let pairs = [["%", "%25"], [" ", "%20"], ["&", "%26"], ["=", "%3D"],
+		["+", "%2B"], ["#", "%23"], ["?", "%3F"], ["\"", "%22"], ["'", "%27"]];
+	for (let i = 0; i < length(pairs); i++)
+		encoded = replace(encoded, pairs[i][0], pairs[i][1]);
+	return encoded;
+}
+
+function mProfileExport(req) {
+	let id = req.args.id, cfg = uciConfig();
+	if (!validProfile(id) || cfg == null || cfg[id] == null || cfg[id][".type"] != "server")
+		return { ok: false, error: "invalid profile id" };
+	let section = cfg[id];
+	if (!configuredProfile(section)) return { ok: false, error: "profile has no peer or password" };
+	let link = "csqtt://connect?v=2&host=" + percentEncode(section.peer) +
+		"&password=" + percentEncode(section.password) +
+		"&workers=" + percentEncode(profileValue(cfg, id, "workers", "9")) +
+		"&obfs=" + percentEncode(profileValue(cfg, id, "obfs", "unified")) +
+		"&turn_transport=" + percentEncode(profileValue(cfg, id, "turn_transport", "udp"));
+	let vk = mainValue(cfg, "vk", "");
+	if (vk != "") link += "&hashes=" + percentEncode(vk);
+	return { ok: true, instance: "main", link: link };
+}
+
+function mProfileImport(req) {
+	let link = clean(req.args.link);
+	if (link == "" || length(link) > 16384 || substr(lc(link), 0, 8) != "csqtt://")
+		return { ok: false, error: "invalid CSQTT link" };
+	let decoded = run([BIN, "--decode-link", link]);
+	if (decoded.code != 0)
+		return { ok: false, error: "link authentication or decryption failed" };
+	let payload = clean(decoded.out);
+	if (payload == "" || length(payload) > 8192 ||
+		(index(payload, "host=") < 0 && index(payload, "connect?") < 0))
+		return { ok: false, error: "decoded link has an unsupported payload" };
+	return { ok: true, instance: "main", payload: payload };
+}
+
+function mHashesValidate(req) {
+	let vk = clean(req.args.vk);
+	let cfg = uciConfig();
+	if (vk == "" && validProfile(req.args.id) && cfg != null && cfg[req.args.id] != null)
+		vk = cfg[req.args.id].vk != null ? "" + cfg[req.args.id].vk : "";
+	if (vk == "") return { ok: true, total: 0, valid: 0, captcha: 0, invalid: 0, unavailable: 0, hashes: [] };
+	if (length(vk) > 8192) return { ok: false, error: "VK hash list is too long" };
+	let fingerprint = mainValue(cfg, "fingerprint", "chrome");
+	let clientIds = mainValue(cfg, "client_ids", "");
+	let result = run([BIN, "--validate-vk-hashes", "--vk", vk, "--fingerprint", fingerprint, "--client-ids", clientIds]);
+	let hashes = [], valid = 0, captcha = 0, invalid = 0, unavailable = 0;
+	let lines = split(result.out, "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let pos = index(lines[i], "HASH_CHECK:");
+		if (pos < 0) continue;
+		let item = parseJson(substr(lines[i], pos + 11));
+		if (item == null) continue;
+		let state = item.status != null ? "" + item.status : "unknown";
+		if (state == "valid") valid++;
+		else if (state == "captcha") captcha++;
+		else if (state == "unavailable") unavailable++;
+		else invalid++;
+		push(hashes, { index: length(hashes), status: state,
+			code: item.code != null ? item.code : 0,
+			message: item.message != null ? "" + item.message : "" });
+	}
+	return { ok: length(hashes) > 0 || result.code == 0, code: result.code,
+		total: length(hashes), valid: valid, captcha: captcha,
+		invalid: invalid, unavailable: unavailable, hashes: hashes,
+		error: length(hashes) == 0 && result.code != 0 ? clean(result.out) : null };
+}
+
+function mSharedMigratePreview(req) {
+	return { ok: true, apply: false, output: "Schema 2 is already active; no legacy settings need migration." };
+}
+
+function mSharedMigrateApply(req) {
+	uciSet("main", "schema_version", "2");
+	let result = uciCommit();
+	return { ok: result.code == 0, apply: true, code: result.code,
+		output: result.code == 0 ? "Schema 2 confirmed." : clean(result.out) };
+}
+
+function mAccessCheck(req) {
+	let status = statusObject();
+	return { ok: status.running && status.interface_up, instance: "main",
+		target: mainValue(uciConfig(), "health_target", ""),
+		error: status.running && status.interface_up ? null : "tunnel interface is not ready" };
+}
+
+function mHashRecheck(req) {
+	return { ok: false, error: "Use the VK hash check on the Tunnel & VK page" };
+}
+
+function mCaptchaList(req) {
+	let status = statusObject();
+	let raw = status.status;
+	let challenges = raw.captcha_challenges != null ? raw.captcha_challenges : [];
+	return { instance: "main", running: status.running,
+		captcha_pending: raw.captcha_pending != null ? raw.captcha_pending : length(challenges),
+		challenges: challenges, profiles_required: [] };
+}
+
+function mCaptchaCancel(req) {
+	return { ok: false, error: "The 2.5.0 core handles CAPTCHA inside the active session" };
+}
+
+function mCaptchaHelperUrl(req) {
+	return { ok: false, error: "External CAPTCHA helper is not exposed by this core build" };
+}
+
+function mCaptchaHelperInfo(req) {
+	let status = statusObject();
+	return { ok: true, instance: "main", endpoint: "internal",
+		reachable: false, helper_running: status.running,
+		captcha_pending: status.status.captcha_pending != null ? status.status.captcha_pending : 0,
+		error: "CAPTCHA is handled internally by csqtt-core 2.5.0" };
+}
+
+function mSelfTest(req) {
+	let result = run([resolveBin(), "--self-test"]);
+	return { ok: result.code == 0, code: result.code, output: clean(result.out) };
+}
+
+return {
+	csqtt: {
+		status: { args: { instance: "main" }, call: mStatus },
+		logs: { args: { source: "file", lines: 100, grep: "", instance: "main" }, call: mLogs },
+		logs_clear: { args: { instance: "main" }, call: mLogsClear },
+		service: { args: { action: "", instance: "main" }, call: mService },
+		access_check: { args: { instance: "main" }, call: mAccessCheck },
+		hash_recheck: { args: { instance: "main" }, call: mHashRecheck },
+		test_conf: { args: { instance: "main" }, call: mTestConf },
+		diag: { args: { instance: "main" }, call: mDiag },
+		profiles: { args: { instance: "main" }, call: mProfiles },
+		profile_action: { args: { action: "", id: "", instance: "main" }, call: mProfileAction },
+		profile_import: { args: { link: "", id: "", name: "", activate: false, vk_to_shared: false, commit: false, instance: "main" }, call: mProfileImport },
+		profile_export: { args: { id: "", instance: "main" }, call: mProfileExport },
+		hashes_validate: { args: { id: "", vk: "", instance: "main" }, call: mHashesValidate },
+		shared_migrate_preview: { args: { instance: "main" }, call: mSharedMigratePreview },
+		shared_migrate_apply: { args: { instance: "main" }, call: mSharedMigrateApply },
+		captcha_list: { args: { instance: "main" }, call: mCaptchaList },
+		captcha_cancel: { args: { id: "", instance: "main" }, call: mCaptchaCancel },
+		captcha_helper_url: { args: { id: "", instance: "main" }, call: mCaptchaHelperUrl },
+		captcha_helper_info: { args: { instance: "main" }, call: mCaptchaHelperInfo },
+		selftest: { args: {}, call: mSelfTest }
+	}
+};
