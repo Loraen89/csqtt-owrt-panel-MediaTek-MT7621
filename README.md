@@ -24,6 +24,29 @@ Netis N6 / Xiaomi Mi Router 3G. Ядро: [amurcanov/csqtt](https://github.com/a
 
 ## Установка
 
+### Вариант A: напрямую с GitHub (рекомендуется)
+
+Репозиторий приватный, поэтому нужен токен GitHub с доступом на чтение
+(classic PAT: scope `repo`; fine-grained: `Contents: read-only`).
+
+```sh
+# на роутере (OpenWrt 25.12):
+apk add curl
+export GITHUB_TOKEN=github_pat_xxx
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -o /tmp/install-from-github.sh \
+  https://raw.githubusercontent.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/main/install-from-github.sh
+
+ash /tmp/install-from-github.sh              # панель + ядро 2.5.1
+ash /tmp/install-from-github.sh --core both  # панель + оба ядра
+```
+
+Скрипт сам скачает APK из [последнего релиза](https://github.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/releases/latest),
+проверит SHA256 и установит. Параметр `--ref main` — скачивание из ветки/тега
+вместо релиза.
+
+### Вариант B: локально (файлы уже на роутере)
+
 1. Скопируйте содержимое `dist/` и `install-csqtt.sh` на роутер (например, в `/tmp/csqtt`):
    ```sh
    scp -O dist/*.apk dist/SHA256SUMS install-csqtt.sh root@192.168.1.1:/tmp/csqtt/
