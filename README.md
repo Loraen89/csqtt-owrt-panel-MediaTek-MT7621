@@ -1,11 +1,12 @@
-# CSQTT для MediaTek MT7621 (OpenWrt 25.12)
+# CSQTT для MediaTek MT7621 · OpenWrt 25.12
 
-> **Текущий статус развёртывания и диагностика: [STATUS.md](STATUS.md)**
-> (сервер lv.velopit.ru не отвечает на GETCONF — разбор и чеклист; скрипты в `docs/diagnostics/`)
+Готовый комплект APK для запуска **CSQTT (VK-туннель)** на роутерах с SoC
+**MediaTek MT7621**: Netis N6 v1, Xiaomi Mi Router 3G и других устройствах
+`ramips/mt7621`. Целевая архитектура — `mipsel_24kc`, MIPS32r2 o32
+soft-float, musl, пакетный менеджер `apk` из OpenWrt 25.12.
 
-Порт пакета **CSQTT** (VK-туннель) на роутеры с SoC **MediaTek MT7621**
-(`mipsel_24kc`, musl, MIPS32r2 soft-float): Netis N6, Xiaomi Mi Router 3G
-и другие устройства ramips/mt7621 под управлением **OpenWrt 25.12**.
+Комплект состоит из панели LuCI и двух независимых пакетов ядра. При установке
+можно выбрать 2.1.9, 2.5.0 либо оба ядра; ненужное ядро не скачивается.
 
 Основано на [csqtt-openwrt](https://github.com/starkugz/csqtt-openwrt) v2.0
 (скрипты, конвенции пакетов) и MT7621-адаптациях ядра из приватных репозиториев
@@ -17,7 +18,7 @@ Netis N6 / Xiaomi Mi Router 3G. Ядро: [amurcanov/csqtt](https://github.com/a
 | Пакет | Файл в `dist/` | Описание |
 |---|---|---|
 | `csqtt-core-2.1.9` | `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 (`2.1.9-mt7621-r1`) |
-| `csqtt-core-2.5.0` | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1 (`2.5.1-mt7621-r1`) |
+| `csqtt-core-2.5.0` | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ветка 2.5.0, исправленный бинарник 2.5.1 (`2.5.1-mt7621-r1`) |
 | `luci-app-csqtt` | `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель LuCI 2.0-r2 (arch `noarch`) |
 
 Оба ядра — статические ELF32 MIPS32r2 o32 soft-float (musl), без внешних
@@ -30,30 +31,64 @@ GitHub, Cloudflare или Google. Результат действует пять
 маршруты, DNS, firewall или конфигурацию SSClash. Подробности и результаты
 проверки: [`docs/RELEASE-NOTES-2.0-r2.md`](docs/RELEASE-NOTES-2.0-r2.md).
 
+## Как устроен выбор ядра
+
+Это не один APK со встроенными двумя бинарниками:
+
+- панель `luci-app-csqtt` устанавливается всегда;
+- `--core 2.1.9` устанавливает только `csqtt-core-2.1.9`;
+- `--core 2.5.0` устанавливает только пакет `csqtt-core-2.5.0` с бинарником
+  версии 2.5.1;
+- `--core both` устанавливает оба пакета и задаёт `core_version=auto`, при
+  котором сначала выбирается 2.5.0/2.5.1, затем 2.1.9.
+
+Без параметра установщик показывает интерактивный выбор. В автоматическом
+неинтерактивном запуске используется 2.5.0.
+
 ## Установка
 
-### Вариант A: напрямую с GitHub (рекомендуется)
+### Напрямую из GitHub Releases
 
-Репозиторий приватный, поэтому нужен токен GitHub с доступом на чтение
-(classic PAT: scope `repo`; fine-grained: `Contents: read-only`).
+Дополнительный ключ подписи APK добавлять не требуется: установщик скачивает
+только выбранные пакеты, сверяет их с `SHA256SUMS` и после этого передаёт
+локальные APK в `apk add --allow-untrusted`.
+
+Для полностью анонимной установки без GitHub-токена сам репозиторий и его
+Release должны быть публичными. Пока репозиторий имеет видимость `PRIVATE`,
+GitHub не отдаёт исходный скрипт и Release Assets анонимному роутеру — в этом
+режиме неизбежна авторизация `GITHUB_TOKEN` либо локальное копирование файлов.
+
+Когда репозиторий публичный, установка без токена выглядит так:
 
 ```sh
-# на роутере (OpenWrt 25.12):
 apk add curl
-export GITHUB_TOKEN=github_pat_xxx
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
-  -o /tmp/install-from-github.sh \
-  https://raw.githubusercontent.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/main/install-from-github.sh
+curl -fsSL -o /tmp/install-from-github.sh \
+  https://github.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/releases/latest/download/install-from-github.sh
 
-ash /tmp/install-from-github.sh              # панель + ядро 2.5.1
-ash /tmp/install-from-github.sh --core both  # панель + оба ядра
+ash /tmp/install-from-github.sh                 # интерактивный выбор
+ash /tmp/install-from-github.sh --core 2.1.9    # только 2.1.9
+ash /tmp/install-from-github.sh --core 2.5.0    # только 2.5.0/2.5.1
+ash /tmp/install-from-github.sh --core both     # оба ядра
 ```
 
-Скрипт сам скачает APK из [последнего релиза](https://github.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/releases/latest),
-проверит SHA256 и установит. Параметр `--ref main` — скачивание из ветки/тега
-вместо релиза.
+Для текущего приватного режима задаётся токен только на чтение
+(`Contents: read-only`) и передаётся при первоначальном скачивании скрипта:
 
-### Вариант B: локально (файлы уже на роутере)
+```sh
+export GITHUB_TOKEN='github_pat_...'
+curl -fsSL \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github.raw+json" \
+  -o /tmp/install-from-github.sh \
+  'https://api.github.com/repos/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/contents/install-from-github.sh?ref=main'
+ash /tmp/install-from-github.sh --core both
+```
+
+Скрипт берёт APK из [последнего GitHub Release](https://github.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/releases/latest).
+Параметр `--ref main` предназначен для тестирования файлов `dist/` из ветки
+или тега вместо последнего релиза.
+
+### Локальная установка
 
 1. Скопируйте содержимое `dist/` и `install-csqtt.sh` на роутер (например, в `/tmp/csqtt`):
    ```sh
@@ -63,8 +98,9 @@ ash /tmp/install-from-github.sh --core both  # панель + оба ядра
 2. На роутере:
    ```sh
    cd /tmp/csqtt
-   ash install-csqtt.sh                # панель + ядро 2.5.1 (по умолчанию)
+   ash install-csqtt.sh                # интерактивный выбор
    ash install-csqtt.sh --core 2.1.9   # панель + ядро 2.1.9
+   ash install-csqtt.sh --core 2.5.0   # панель + ядро 2.5.0/2.5.1
    ash install-csqtt.sh --core both    # панель + оба ядра
    ```
 3. Откройте LuCI → **Службы → CSQTT (VK-туннель)**, заполните профиль
