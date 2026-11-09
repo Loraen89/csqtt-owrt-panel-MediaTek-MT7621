@@ -8,13 +8,15 @@ CSQTT_BIN=""
 SELECTED_PROFILE=""
 SELECTED_PRIORITY=2147483647
 
-# Разрешение бинарника ядра по UCI csqtt.main.core_version:
+# Разрешение бинарника ядра по UCI выбранного профиля, затем
+# csqtt.main.core_version:
 #   auto (по умолчанию) - предпочесть 2.5.0, затем 2.1.9, затем legacy /usr/bin/csqtt-core;
 #   2.1.9               - только /usr/libexec/csqtt/csqtt-core-2.1.9;
 #   2.5.0 / 2.5.1       - только /usr/libexec/csqtt/csqtt-core-2.5.0.
 resolve_core() {
 	local pref
-	config_get pref main core_version auto
+	[ -n "$SELECTED_PROFILE" ] && config_get pref "$SELECTED_PROFILE" core_version
+	[ -n "$pref" ] || config_get pref main core_version auto
 	case "$pref" in
 		2.1.9)
 			CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.1.9" ;;
@@ -77,12 +79,6 @@ select_profile() {
 
 start_service() {
 	config_load csqtt
-	resolve_core
-	[ -x "$CSQTT_BIN" ] || {
-		echo "csqtt: $CSQTT_BIN is missing or not executable" >&2
-		return 1
-	}
-
 	local enabled peer password vk workers runtime_threads listen ifname tun_mtu no_tun
 	local obfs turn_transport srtp_mode fingerprint captcha_mode vk_hash_mode vk_auth_mode
 	local client_ids turn turn_port custom_turn_ips exact_workers startup_wait
@@ -97,6 +93,11 @@ start_service() {
 
 	select_profile || {
 		echo "csqtt: no enabled and complete server profile" >&2
+		return 1
+	}
+	resolve_core
+	[ -x "$CSQTT_BIN" ] || {
+		echo "csqtt: $CSQTT_BIN is missing or not executable" >&2
 		return 1
 	}
 

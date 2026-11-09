@@ -1,7 +1,7 @@
 'use strict';
 'require view';
 'require rpc';
-'require view.csqtt.i18n as i18n';
+'require view.csqtt.i18n as i18n';'require view.csqtt.theme as cqtTheme';
 
 var _ = i18n.t;
 var callStatus = rpc.declare({ object: 'csqtt', method: 'status' });

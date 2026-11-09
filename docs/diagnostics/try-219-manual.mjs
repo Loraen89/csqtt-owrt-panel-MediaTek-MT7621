@@ -25,7 +25,7 @@ console.log(await withConn(async (c) => {
 		'sleep 3',
 		'pidof csqtt-core-2.5.0 && echo "ЕЩЁ ЖИВ!" || echo "2.5.0 остановлен"',
 		'ip link del csqtt0 2>/dev/null; echo "csqtt0 убран"',
-		`setsid env CSQTT_PASSWORD='<ПАРОЛЬ_ПОДКЛЮЧЕНИЯ>' /usr/libexec/csqtt/csqtt-core-2.1.9 --peer lv.velopit.ru:46000 --vk "https://vk.ru/call/join/KaahsJncWEzOhwsozPzdOp6se3TCnX6RW3qfU1AV5K4" --workers 3 --listen 127.0.0.1:9000 --tun csqtt0 --tun-mtu 1300 --obfs audio --turn-transport udp --fingerprint chrome --captcha-mode auto --vk-hash-mode manual --vk-auth-mode vkcalls --password '<ПАРОЛЬ_ПОДКЛЮЧЕНИЯ>' --ignore-stdin-eof >/tmp/c219.log 2>&1 &`,
+		`setsid env CSQTT_PASSWORD='<ПАРОЛЬ_ПОДКЛЮЧЕНИЯ>' /usr/libexec/csqtt/csqtt-core-2.1.9 --peer lv.velopit.ru:46000 --vk "https://vk.ru/call/join/<VK_CALL_HASH>" --workers 3 --listen 127.0.0.1:9000 --tun csqtt0 --tun-mtu 1300 --obfs audio --turn-transport udp --fingerprint chrome --captcha-mode auto --vk-hash-mode manual --vk-auth-mode vkcalls --password '<ПАРОЛЬ_ПОДКЛЮЧЕНИЯ>' --ignore-stdin-eof >/tmp/c219.log 2>&1 &`,
 		'echo "запущен pid $!"',
 		'sleep 2',
 		'pidof csqtt-core-2.1.9 && echo "2.1.9 работает" || { echo "2.1.9 УПАЛ:"; head -20 /tmp/c219.log; }',

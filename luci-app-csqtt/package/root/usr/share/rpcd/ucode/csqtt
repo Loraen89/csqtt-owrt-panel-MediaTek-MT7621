@@ -14,7 +14,7 @@ const LOG_PATH = "/var/log/csqtt.log";
 const IFNAME_RE = regexp("^[A-Za-z0-9_.-]{1,15}$");
 const PROFILE_RE = regexp("^[A-Za-z0-9_]+$");
 const TRAIL_NL = regexp("[\r\n]+$");
-const PROFILE_SAFE = ["name", "enabled", "priority", "peer", "workers",
+const PROFILE_SAFE = ["name", "enabled", "priority", "peer", "core_version", "workers",
 	"obfs", "turn_transport", "captcha_mode", "fingerprint", "note"];
 
 function shellquote(value) {
@@ -184,6 +184,8 @@ function safeProfiles(cfg, runtimeActive, running) {
 			let key = PROFILE_SAFE[i];
 			if (section[key] != null) profile[key] = "" + section[key];
 		}
+		profile.core_version = profileValue(cfg, id, "core_version",
+			mainValue(cfg, "core_version", "auto"));
 		if (section.enabled == "0")
 			profile.state = "disabled";
 		else if (running && id == runtimeActive)
@@ -198,12 +200,13 @@ function safeProfiles(cfg, runtimeActive, running) {
 }
 
 function resolveBin() {
-	// Приоритет как в init.d resolve_core: сначала UCI csqtt.main.core_version,
-	// затем 2.5.0 -> 2.1.9 -> legacy /usr/bin/csqtt-core.
-	let pref = "";
-	let r = run([UCI, "-q", "get", "csqtt.main.core_version"]);
-	if (r.code == 0)
-		pref = clean(r.out);
+	// Приоритет как в init.d resolve_core: ядро выбранного профиля, затем
+	// csqtt.main.core_version, затем 2.5.0 -> 2.1.9 -> legacy.
+	let cfg = uciConfig();
+	let active = chooseProfile(cfg);
+	let pref = active != ""
+		? profileValue(cfg, active, "core_version", mainValue(cfg, "core_version", "auto"))
+		: mainValue(cfg, "core_version", "auto");
 	if (pref == "2.1.9")
 		return BIN_219;
 	if (pref == "2.5.0" || pref == "2.5.1")
@@ -516,14 +519,39 @@ function mProfileImport(req) {
 	let link = clean(req.args.link);
 	if (link == "" || length(link) > 16384 || substr(lc(link), 0, 8) != "csqtt://")
 		return { ok: false, error: "invalid CSQTT link" };
-	let decoded = run([resolveBin(), "--decode-link", link]);
+	let rest = clean(substr(link, 8));
+	let lower = lc(rest);
+	let plain = substr(lower, 0, 8) == "connect?" ||
+		index(lower, "host=") >= 0 || substr(lower, 0, 2) == "v=";
+	if (plain) {
+		let payload = substr(lower, 0, 8) == "connect?" ? rest : "connect?" + rest;
+		if (length(payload) > 8192 || index(lc(payload), "host=") < 0 ||
+			index(lc(payload), "password=") < 0)
+			return { ok: false, error: "plain link has an unsupported payload" };
+		return { ok: true, instance: "main", payload: payload,
+			core_version: "2.1.9", link_type: "plain" };
+	}
+	// Encrypted links belong to the 2.5.x protocol. Never decode them with the
+	// currently selected binary: a previous 2.1.9 selection must not make a
+	// valid encrypted link fail or silently pick the wrong core.
+	let decoded = run([BIN_250, "--decode-link", link]);
 	if (decoded.code != 0)
 		return { ok: false, error: "link authentication or decryption failed" };
 	let payload = clean(decoded.out);
 	if (payload == "" || length(payload) > 8192 ||
-		(index(payload, "host=") < 0 && index(payload, "connect?") < 0))
+		(index(lc(payload), "host=") < 0 && index(lc(payload), "connect?") < 0) ||
+		index(lc(payload), "password=") < 0)
 		return { ok: false, error: "decoded link has an unsupported payload" };
-	return { ok: true, instance: "main", payload: payload };
+	return { ok: true, instance: "main", payload: payload,
+		core_version: "2.5.0", link_type: "encrypted" };
+}
+
+function mLinkDecrypt(req) {
+	let result = mProfileImport(req);
+	if (!result.ok)
+		return result;
+	return { ok: true, instance: "main", link: "csqtt://" + result.payload,
+		core_version: result.core_version, link_type: result.link_type };
 }
 
 function mHashesValidate(req) {
@@ -651,6 +679,7 @@ return {
 		profiles: { args: { instance: "main" }, call: mProfiles },
 		profile_action: { args: { action: "", id: "", instance: "main" }, call: mProfileAction },
 		profile_import: { args: { link: "", id: "", name: "", activate: false, vk_to_shared: false, commit: false, instance: "main" }, call: mProfileImport },
+		link_decrypt: { args: { link: "", instance: "main" }, call: mLinkDecrypt },
 		profile_export: { args: { id: "", instance: "main" }, call: mProfileExport },
 		hashes_validate: { args: { id: "", vk: "", instance: "main" }, call: mHashesValidate },
 		shared_migrate_preview: { args: { instance: "main" }, call: mSharedMigratePreview },

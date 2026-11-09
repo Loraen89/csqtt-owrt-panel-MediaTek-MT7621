@@ -28,6 +28,7 @@
 					"test_conf",
 					"profile_action",
 					"profile_import",
+					"link_decrypt",
 					"profile_export",
 					"shared_migrate_apply",
 					"captcha_cancel",
