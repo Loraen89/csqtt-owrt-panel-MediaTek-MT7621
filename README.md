@@ -18,12 +18,17 @@ Netis N6 / Xiaomi Mi Router 3G. Ядро: [amurcanov/csqtt](https://github.com/a
 |---|---|---|
 | `csqtt-core-2.1.9` | `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 (`2.1.9-mt7621-r1`) |
 | `csqtt-core-2.5.0` | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1 (`2.5.1-mt7621-r1`) |
-| `luci-app-csqtt` | `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель LuCI 2.0 (arch `all`) |
+| `luci-app-csqtt` | `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель LuCI 2.0-r2 (arch `noarch`) |
 
 Оба ядра — статические ELF32 MIPS32r2 o32 soft-float (musl), без внешних
 зависимостей, кроме `kmod-tun`. MT7621-патчи: `portable-atomic` вместо
 64-битных атомиков, native TUN (`/dev/net/tun`), `--self-test`, режим
 демона procd, запись `/var/run/csqtt/status.json` для панели.
+
+Панель `2.0-r2` добавляет ручную проверку HTTPS через `csqtt0` к OpenWrt,
+GitHub, Cloudflare или Google. Результат действует пять минут, не меняет UCI,
+маршруты, DNS, firewall или конфигурацию SSClash. Подробности и результаты
+проверки: [`docs/RELEASE-NOTES-2.0-r2.md`](docs/RELEASE-NOTES-2.0-r2.md).
 
 ## Установка
 

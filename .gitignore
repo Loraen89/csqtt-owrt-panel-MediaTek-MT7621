@@ -9,6 +9,7 @@ core219/source/core/target/
 core251/source/core/target/
 core*/source/core/target/
 core*/target/
+deploy-backups/
 
 # Logs
 *.log

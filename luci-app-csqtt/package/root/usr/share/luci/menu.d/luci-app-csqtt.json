@@ -14,7 +14,7 @@
 			"type": "view",
 			"path": "csqtt/status"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	},
 	"admin/services/csqtt/tunnel": {
 		"title": "Туннель и VK",
@@ -23,7 +23,7 @@
 			"type": "view",
 			"path": "csqtt/tunnel"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	},
 	"admin/services/csqtt/profiles": {
 		"title": "Профили",
@@ -32,7 +32,7 @@
 			"type": "view",
 			"path": "csqtt/profiles"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	},
 	"admin/services/csqtt/settings": {
 		"title": "Настройки",
@@ -41,7 +41,7 @@
 			"type": "view",
 			"path": "csqtt/settings"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	},
 	"admin/services/csqtt/logs": {
 		"title": "Журналы",
@@ -50,7 +50,7 @@
 			"type": "view",
 			"path": "csqtt/logs"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	},
 	"admin/services/csqtt/captcha": {
 		"title": "CAPTCHA",
@@ -59,7 +59,7 @@
 			"type": "view",
 			"path": "csqtt/captcha"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	},
 	"admin/services/csqtt/about": {
 		"title": "О программе",
@@ -68,6 +68,6 @@
 			"type": "view",
 			"path": "csqtt/about"
 		},
-		"acl": ["luci-app-csqtt:read"]
+		"depends": { "acl": ["luci-app-csqtt"] }
 	}
 }

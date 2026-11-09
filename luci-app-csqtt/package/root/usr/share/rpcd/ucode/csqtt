@@ -9,6 +9,7 @@ const INIT = "/etc/init.d/csqtt";
 const UCI = "/sbin/uci";
 const LOGREAD = "/sbin/logread";
 const STATUS_PATH = "/var/run/csqtt/status.json";
+const ACCESS_STATUS_PATH = "/var/run/csqtt/access-check.json";
 const LOG_PATH = "/var/log/csqtt.log";
 const IFNAME_RE = regexp("^[A-Za-z0-9_.-]{1,15}$");
 const PROFILE_RE = regexp("^[A-Za-z0-9_]+$");
@@ -57,6 +58,32 @@ function readNumber(path) {
 
 function fileExists(path) {
 	try { return fs.stat(path) != null; } catch (e) { return false; }
+}
+
+function writeJson(path, value) {
+	let file;
+	try { file = fs.open(path, "w", 384); } catch (e) { file = null; }
+	if (file == null) return false;
+	try {
+		file.write(sprintf("%.J", value));
+		file.close();
+		return true;
+	} catch (e) {
+		try { file.close(); } catch (closeError) {}
+		return false;
+	}
+}
+
+function accessTarget(id) {
+	if (id == "github")
+		return { id: "github", name: "GitHub", url: "https://github.com/" };
+	if (id == "cloudflare")
+		return { id: "cloudflare", name: "Cloudflare", url: "https://www.cloudflare.com/cdn-cgi/trace" };
+	if (id == "google")
+		return { id: "google", name: "Google", url: "https://www.google.com/generate_204" };
+	if (id == "openwrt" || id == null || id == "")
+		return { id: "openwrt", name: "OpenWrt", url: "https://openwrt.org/" };
+	return null;
 }
 
 function uciUnquote(value) {
@@ -195,7 +222,9 @@ function binaryVersion() {
 
 function processInfo() {
 	let pid = "";
-	for (let name of [ "csqtt-core-2.5.0", "csqtt-core-2.1.9", "csqtt-core" ]) {
+	let names = [ "csqtt-core-2.5.0", "csqtt-core-2.1.9", "csqtt-core" ];
+	for (let i = 0; i < length(names); i++) {
+		let name = names[i];
 		let result = run(["/bin/pidof", name]);
 		if (result.code == 0 && clean(result.out) != "") {
 			pid = clean(result.out);
@@ -222,6 +251,21 @@ function statusObject() {
 	let connected = false;
 	if (proc.running && raw != null && raw.connectivity != null)
 		connected = raw.connectivity.session_established == true;
+	let access = parseJson(readText(ACCESS_STATUS_PATH));
+	let accessState = !proc.running ? "not_running" : (interfaceUp ? "waiting" : "unavailable");
+	let accessVerified = false;
+	if (proc.running && interfaceUp && access != null) {
+		let sameInterface = access.ifname == ifname;
+		let sameSession = raw == null || raw.started_at == null || access.started_at == null ||
+			int(access.started_at) == int(raw.started_at);
+		let checkedAt = int(access.checked_at != null ? access.checked_at : 0);
+		let age = time() - checkedAt;
+		if (!sameInterface || !sameSession || checkedAt <= 0 || age < 0 || age > 300)
+			accessState = "stale";
+		else
+			accessState = access.state == "ok" ? "ok" : "failed";
+		accessVerified = accessState == "ok";
+	}
 
 	status.version = binaryVersion();
 	status.daemon_state = proc.running ? "running" : "stopped";
@@ -244,9 +288,16 @@ function statusObject() {
 		tun_present: interfaceUp,
 		session_established: connected,
 		transfer_observed: proc.running && (rx > 0 || tx > 0),
-		access_verified: false,
+		access_verified: accessVerified,
 		stage: !proc.running ? "stopped" : (connected ? "connected" : "connecting"),
-		access_state: !proc.running ? "not_running" : (interfaceUp ? "waiting" : "unavailable"),
+		access_state: accessState,
+		access_target_id: access != null ? access.target_id : "openwrt",
+		access_target: access != null ? access.target : null,
+		access_target_url: access != null ? access.url : null,
+		access_target_default: access != null ? access.target_id == "openwrt" : true,
+		access_checked_at: access != null ? access.checked_at : null,
+		access_reason: access != null ? access.reason : null,
+		access_http_code: access != null ? access.http_code : null,
 		session_age_secs: (proc.running && raw != null && raw.uptime_secs != null) ? raw.uptime_secs : 0
 	};
 	status.rx_bytes = rx;
@@ -520,9 +571,37 @@ function mSharedMigrateApply(req) {
 
 function mAccessCheck(req) {
 	let status = statusObject();
-	return { ok: status.running && status.interface_up, instance: "main",
-		target: mainValue(uciConfig(), "health_target", ""),
-		error: status.running && status.interface_up ? null : "tunnel interface is not ready" };
+	if (!status.running || !status.interface_up)
+		return { ok: false, instance: "main", error: "tunnel interface is not ready" };
+	let target = accessTarget(req.args.target);
+	if (target == null)
+		return { ok: false, instance: "main", error: "unsupported access-check target" };
+	let ifname = status.interface;
+	if (match(ifname, IFNAME_RE) == null)
+		return { ok: false, instance: "main", error: "invalid tunnel interface" };
+	let result = run(["/usr/bin/curl", "-4", "--location", "--silent", "--show-error",
+		"--connect-timeout", "5", "--max-time", "12", "--interface", ifname,
+		"--output", "/dev/null", "--write-out", "\n%{http_code}", target.url]);
+	let output = clean(result.out), lines = split(output, "\n");
+	let httpCode = length(lines) > 0 ? int(lines[length(lines) - 1]) : 0;
+	let success = result.code == 0 && httpCode >= 200 && httpCode < 400;
+	let reason = success ? "HTTP " + httpCode : (httpCode > 0 ? "HTTP " + httpCode : output);
+	if (reason == "") reason = "curl exited with code " + result.code;
+	if (length(reason) > 240) reason = substr(reason, 0, 240) + "…";
+	let record = {
+		state: success ? "ok" : "failed",
+		target_id: target.id,
+		target: target.name,
+		url: target.url,
+		ifname: ifname,
+		http_code: httpCode,
+		reason: reason,
+		checked_at: time(),
+		started_at: status.status != null ? status.status.started_at : null
+	};
+	if (!writeJson(ACCESS_STATUS_PATH, record))
+		return { ok: false, instance: "main", error: "unable to save access-check result" };
+	return { ok: true, success: success, instance: "main", result: record };
 }
 
 function mHashRecheck(req) {
@@ -565,7 +644,7 @@ return {
 		logs: { args: { source: "file", lines: 100, grep: "", instance: "main" }, call: mLogs },
 		logs_clear: { args: { instance: "main" }, call: mLogsClear },
 		service: { args: { action: "", instance: "main" }, call: mService },
-		access_check: { args: { instance: "main" }, call: mAccessCheck },
+		access_check: { args: { target: "openwrt", instance: "main" }, call: mAccessCheck },
 		hash_recheck: { args: { instance: "main" }, call: mHashRecheck },
 		test_conf: { args: { instance: "main" }, call: mTestConf },
 		diag: { args: { instance: "main" }, call: mDiag },
