@@ -97,7 +97,16 @@ else
 	gh_api "https://api.github.com/repos/$REPO/releases/latest" "$WORKDIR/.release.json"
 	TAG=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$WORKDIR/.release.json" | head -n1)
 	echo "Релиз: ${TAG:-неизвестно}"
-	URLS=$(sed -n 's/.*"browser_download_url": *"\([^"]*\)".*/\1/p' "$WORKDIR/.release.json")
+	# Для приватного репо browser_download_url не принимает Bearer (404).
+	# Качаем через API-URL ассета: https://api.github.com/repos/.../releases/assets/ID
+	PAIRS=$(awk '
+		/"url": *"https:\/\/api\.github\.com\/repos\/[^"]*\/assets\// {
+			u=$0; sub(/.*"url": *"/, "", u); sub(/".*/, "", u)
+		}
+		/"name": *"/ {
+			n=$0; sub(/.*"name": *"/, "", n); sub(/".*/, "", n)
+			if (u != "") { print u " " n; u = "" }
+		}' "$WORKDIR/.release.json")
 	rm -f "$WORKDIR/.release.json"
 fi
 
@@ -110,8 +119,11 @@ if [ "$CORE_CHOICE" != '2.1.9' ]; then
 fi
 
 for name in $WANTED; do
-	url=$(printf '%s\n' "$URLS" | grep "/$name\$" | head -n1)
-	[ -n "$url" ] || url=$(printf '%s\n' "$URLS" | grep "/$name?" | head -n1)
+	if [ -n "$REF" ]; then
+		url=$(printf '%s\n' "$URLS" | grep "/$name\$" | head -n1)
+	else
+		url=$(printf '%s\n' "$PAIRS" | awk -v n="$name" '$2==n {print $1; exit}')
+	fi
 	[ -n "$url" ] || { echo "В источнике не найден файл $name" >&2; exit 1; }
 	echo "Скачиваю $name ..."
 	gh_get "$url" "$WORKDIR/$name"
