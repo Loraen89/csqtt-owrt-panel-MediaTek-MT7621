@@ -98,7 +98,13 @@ function walkFiles(directory, prefix, files, skip = new Set()) {
 			let mode = 0o644;
 			if (relative.startsWith('etc/init.d/') || relative.startsWith('usr/libexec/') && relative.endsWith('.sh')) mode = 0o755;
 			if (relative === 'etc/config/csqtt') mode = 0o600;
-			files.push([relative, fs.readFileSync(full), mode]);
+			let data = fs.readFileSync(full);
+			// APK can be assembled on Windows, where the worktree may contain CRLF
+			// even though Git stores LF. OpenWrt executes these files directly and
+			// interprets a CR in "#!/bin/sh\r" as part of the interpreter path.
+			if (relative.startsWith('etc/init.d/') || relative.startsWith('usr/libexec/') && relative.endsWith('.sh'))
+				data = Buffer.from(data.toString('utf8').replace(/\r\n?/g, '\n'));
+			files.push([relative, data, mode]);
 		}
 	}
 }
@@ -151,7 +157,7 @@ exit 0
 `);
 const panelApk = buildApk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r2',
+	pkgver: '2.0-r3',
 	pkgdesc: 'CSQTT LuCI panel, profile-aware service and RPC for MediaTek MT7621 (cores 2.1.9 / 2.5.1)',
 	arch: 'noarch',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],

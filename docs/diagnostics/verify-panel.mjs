@@ -1,11 +1,14 @@
 // verify-panel.mjs — локальная проверка панели: формат двух gzip-потоков,
 // arch, datahash, pax-SHA1 всех файлов, соответствие SHA256SUMS.
 import fs from 'node:fs';
+import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-const DIST = 'C:\\Users\\dom\\Downloads\\OpenCodev1\\csqtt-owrt-panel-MediaTek-MT7621\\dist';
-const PANEL = `${DIST}\\luci-app-csqtt-2.0-openwrt-25.12.apk`;
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DIST = path.resolve(HERE, '..', '..', 'dist');
+const PANEL = path.join(DIST, 'luci-app-csqtt-2.0-openwrt-25.12.apk');
 
 const apk = fs.readFileSync(PANEL);
 console.log('размер:', apk.length, 'магия:', apk.subarray(0, 3).toString('hex'));
@@ -81,6 +84,10 @@ for (const m of dm) {
 	}
 	if (m.type === '0' || m.type === '\0') {
 		const fileData = data.subarray(m.dataOff, m.dataOff + m.size);
+		if ((m.name.startsWith('etc/init.d/') || m.name.endsWith('.sh')) && fileData.includes(0x0d)) {
+			console.error('CRLF в исполняемом shell-файле:', m.name);
+			failed++;
+		}
 		if (pendingSha1) {
 			const h = crypto.createHash('sha1').update(fileData).digest('hex');
 			if (h !== pendingSha1) { console.error('SHA1 mismatch:', m.name); failed++; }
@@ -93,12 +100,12 @@ console.log(`data-файлов: ${checked}, pax-провалов: ${failed}`);
 if (failed) process.exit(1);
 
 // SHA256SUMS
-const sums = fs.readFileSync(`${DIST}\\SHA256SUMS`, 'utf8');
+const sums = fs.readFileSync(path.join(DIST, 'SHA256SUMS'), 'utf8');
 console.log('--- SHA256SUMS (байт ' + Buffer.byteLength(sums) + ', LF: ' + !/\r/.test(sums) + ') ---');
 let sumsOk = true;
 for (const line of sums.trim().split('\n')) {
 	const [hash, name] = line.split(/\s+/);
-	const h = crypto.createHash('sha256').update(fs.readFileSync(`${DIST}\\${name}`)).digest('hex');
+	const h = crypto.createHash('sha256').update(fs.readFileSync(path.join(DIST, name))).digest('hex');
 	const ok = h === hash;
 	if (!ok) sumsOk = false;
 	console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}`);
