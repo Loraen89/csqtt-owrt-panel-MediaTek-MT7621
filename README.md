@@ -1,5 +1,8 @@
 # CSQTT для MediaTek MT7621 (OpenWrt 25.12)
 
+> **Текущий статус развёртывания и диагностика: [STATUS.md](STATUS.md)**
+> (сервер lv.velopit.ru не отвечает на GETCONF — разбор и чеклист; скрипты в `docs/diagnostics/`)
+
 Порт пакета **CSQTT** (VK-туннель) на роутеры с SoC **MediaTek MT7621**
 (`mipsel_24kc`, musl, MIPS32r2 soft-float): Netis N6, Xiaomi Mi Router 3G
 и другие устройства ramips/mt7621 под управлением **OpenWrt 25.12**.
