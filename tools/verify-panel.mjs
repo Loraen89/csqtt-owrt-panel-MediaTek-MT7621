@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DIST = path.resolve(HERE, '..', '..', 'dist');
+const DIST = path.resolve(HERE, '..', 'dist');
 const PANEL = path.join(DIST, 'luci-app-csqtt-2.0-openwrt-25.12.apk');
 
 const apk = fs.readFileSync(PANEL);

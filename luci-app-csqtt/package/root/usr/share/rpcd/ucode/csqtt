@@ -608,7 +608,7 @@ function mAccessCheck(req) {
 	if (match(ifname, IFNAME_RE) == null)
 		return { ok: false, instance: "main", error: "invalid tunnel interface" };
 	let result = run(["/usr/bin/curl", "-4", "--location", "--silent", "--show-error",
-		"--connect-timeout", "5", "--max-time", "12", "--interface", ifname,
+		"--connect-timeout", "10", "--max-time", "12", "--retry", "1", "--retry-delay", "1", "--retry-max-time", "12", "--interface", ifname,
 		"--output", "/dev/null", "--write-out", "\n%{http_code}", target.url]);
 	let output = clean(result.out), lines = split(output, "\n");
 	let httpCode = length(lines) > 0 ? int(lines[length(lines) - 1]) : 0;

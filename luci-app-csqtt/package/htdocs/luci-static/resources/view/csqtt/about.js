@@ -34,7 +34,7 @@ return view.extend({
 		var status = result && result.status || {};
 		var version = status.version || 'csqtt-client (ядро не установлено)';
 		var rows = [];
-		rows = rows.concat(row(_('LuCI panel'), 'MediaTek MT7621 compatibility port r1'));
+		rows = rows.concat(row(_('LuCI panel'), 'lor-panel-csqtt-bs 2.0-r7'));
 		rows = rows.concat(row(_('Core version'), version));
 		rows = rows.concat(row('Архитектура', 'mipsel_24kc / MediaTek MT7621'));
 		rows = rows.concat(row('Прошивка', 'OpenWrt 25.12'));
@@ -43,7 +43,7 @@ return view.extend({
 		return E('div', { class: 'csqtt-about' }, [
 			E('style', {}, CSS),
 			E('div', { class: 'csqtt-brand' }, [
-				E('span', { class: 'csqtt-brand-name' }, 'CSQTT для MediaTek MT7621'),
+				E('span', { class: 'csqtt-brand-name' }, 'lor-panel-csqtt-bs'),
 				E('span', { class: 'csqtt-brand-tag' }, 'полный интерфейс LuCI, ядра 2.1.9 / 2.5.1')
 			]),
 			E('div', { class: 'csqtt-section' }, [
@@ -52,7 +52,7 @@ return view.extend({
 			]),
 			E('div', { class: 'csqtt-section' }, [
 				E('h3', {}, 'Совместимость'),
-				E('p', { class: 'csqtt-note' }, 'Интерфейс сохранён на уровне панели 2.1.9, а служба и RPC адаптированы к одиночному ядру CSQTT 2.5.0. Выбор профиля применяется перед запуском службы. Автоматический failover во время активной сессии этим ядром не предоставляется и в диагностике отмечается предупреждением.')
+				E('p', { class: 'csqtt-note' }, 'Открытые ссылки csqtt://connect используют ядро 2.1.9, зашифрованные — 2.5.1. Ядро сохраняется в профиле и выбирается перед запуском службы. Транспорт TURN по умолчанию — UDP.')
 			]),
 			E('div', { class: 'csqtt-section' }, [
 				E('h3', {}, 'Безопасность сети'),
