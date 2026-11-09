@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out tagged sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Verify release checksums
         working-directory: dist
