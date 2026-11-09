@@ -34,7 +34,7 @@ return view.extend({
 		var status = result && result.status || {};
 		var version = status.version || 'csqtt-client (ядро не установлено)';
 		var rows = [];
-		rows = rows.concat(row(_('LuCI panel'), 'lor-panel-csqtt-bs 2.0-r7'));
+		rows = rows.concat(row(_('LuCI panel'), 'CSQTT-PANEL v2.0 2.0-r8'));
 		rows = rows.concat(row(_('Core version'), version));
 		rows = rows.concat(row('Архитектура', 'mipsel_24kc / MediaTek MT7621'));
 		rows = rows.concat(row('Прошивка', 'OpenWrt 25.12'));
@@ -43,7 +43,7 @@ return view.extend({
 		return E('div', { class: 'csqtt-about' }, [
 			E('style', {}, CSS),
 			E('div', { class: 'csqtt-brand' }, [
-				E('span', { class: 'csqtt-brand-name' }, 'lor-panel-csqtt-bs'),
+				E('span', { class: 'csqtt-brand-name' }, 'CSQTT-PANEL v2.0'),
 				E('span', { class: 'csqtt-brand-tag' }, 'полный интерфейс LuCI, ядра 2.1.9 / 2.5.1')
 			]),
 			E('div', { class: 'csqtt-section' }, [

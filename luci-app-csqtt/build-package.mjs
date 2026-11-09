@@ -1,4 +1,4 @@
-﻿// CSQTT for MediaTek MT7621 вЂ” СЃР±РѕСЂРєР° APK-РїР°РєРµС‚РѕРІ OpenWrt 25.12 (apk v2 С„РѕСЂРјР°С‚).
+// CSQTT for MediaTek MT7621 вЂ” СЃР±РѕСЂРєР° APK-РїР°РєРµС‚РѕРІ OpenWrt 25.12 (apk v2 С„РѕСЂРјР°С‚).
 // РЎРѕР±РёСЂР°РµС‚ С‚СЂРё РїР°РєРµС‚Р° РІ ../dist:
 //   csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.1.9)
 //   csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.5.0, РѕС‚РѕР±СЂР°Р¶Р°РµС‚СЃСЏ РєР°Рє В«2.5.1В»)
@@ -157,8 +157,8 @@ exit 0
 `);
 const panelApk = buildApk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r7',
-	pkgdesc: 'lor-panel-csqtt-bs: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
+	pkgver: '2.0-r8',
+	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
 	arch: 'noarch',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
 	files: panelFiles,

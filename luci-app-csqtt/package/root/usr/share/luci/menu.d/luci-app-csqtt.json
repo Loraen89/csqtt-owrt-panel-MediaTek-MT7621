@@ -1,6 +1,6 @@
 {
 	"admin/services/csqtt": {
-		"title": "lor-panel-csqtt-bs",
+		"title": "CSQTT-PANEL v2.0",
 		"order": 90,
 		"action": {
 			"type": "alias",

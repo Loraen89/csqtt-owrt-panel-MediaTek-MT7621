@@ -1,4 +1,4 @@
-# lor-panel-csqtt-bs
+# CSQTT-PANEL v2.0
 
 Панель LuCI и ядра CSQTT для **MediaTek MT7621**, OpenWrt **25.12.x**,
 архитектура `mipsel_24kc`. Подходит для Xiaomi Mi Router 3G и Netis N6 v1.
@@ -7,7 +7,7 @@
 
 | Файл в `dist/` | Содержимое |
 |---|---|
-| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель lor-panel-csqtt-bs 2.0-r7 |
+| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0 2.0-r8 |
 | `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 |
 | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1; внутреннее имя пакета `csqtt-core-2.5.0` |
 
@@ -31,7 +31,7 @@ ash install-csqtt.sh --core both
 
 ## Настройка
 
-Откройте **LuCI → Службы → lor-panel-csqtt-bs → Профили** и импортируйте ссылку.
+Откройте **LuCI → Службы → CSQTT-PANEL v2.0 → Профили** и импортируйте ссылку.
 
 - Открытая ссылка `csqtt://connect?...` выбирает ядро **2.1.9**.
 - Успешно расшифрованная ссылка выбирает **2.5.1**.
