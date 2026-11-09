@@ -41,11 +41,11 @@ jobs:
             gh release edit "$tag" \
               --draft=false \
               --latest \
-              --title 'CSQTT 2.0-r3 для MediaTek MT7621' \
-              --notes-file docs/RELEASE-NOTES-2.0-r3.md
+              --title 'CSQTT 2.0-r4 для MediaTek MT7621' \
+              --notes-file docs/RELEASE-NOTES-2.0-r4.md
           else
             gh release create "$tag" "${assets[@]}" \
               --latest \
-              --title 'CSQTT 2.0-r3 для MediaTek MT7621' \
-              --notes-file docs/RELEASE-NOTES-2.0-r3.md
+              --title 'CSQTT 2.0-r4 для MediaTek MT7621' \
+              --notes-file docs/RELEASE-NOTES-2.0-r4.md
           fi

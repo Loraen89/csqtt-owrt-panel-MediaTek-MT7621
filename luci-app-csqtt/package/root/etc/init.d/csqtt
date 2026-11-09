@@ -166,13 +166,11 @@ start_service() {
 		--peer "$peer" \
 		--vk "$vk" \
 		--workers "$workers" \
-		--runtime-threads "$runtime_threads" \
 		--listen "$listen" \
 		--tun "$ifname" \
 		--tun-mtu "$tun_mtu" \
 		--obfs "$obfs" \
 		--turn-transport "$turn_transport" \
-		--srtp-mode "$srtp_mode" \
 		--fingerprint "$fingerprint" \
 		--captcha-mode "$captcha_mode" \
 		--vk-hash-mode "$vk_hash_mode" \
@@ -182,17 +180,28 @@ start_service() {
 	append_value --client-ids "$client_ids"
 	append_value --turn "$turn"
 	append_value --port "$turn_port"
-	append_value --custom-turn-ips "$custom_turn_ips"
-	append_value --direct-domains "$direct_domains"
-	append_value --direct-ips "$direct_ips"
 	append_switch --no-tun "$no_tun"
-	append_switch --exact-workers "$exact_workers"
-	append_switch --domain-routing "$domain_routing"
-	append_switch --exclude-ru-zones "$exclude_ru_zones"
-	append_switch --template-domains "$template_domains"
-	append_switch --domain-whitelist "$domain_whitelist"
-	append_switch --ip-routing "$ip_routing"
-	append_switch --ip-whitelist "$ip_whitelist"
+
+	# These options were added after the 2.1.9 CLI. Keep the shared init
+	# script compatible with both packaged cores.
+	if [ "$CSQTT_BIN" = "/usr/libexec/csqtt/csqtt-core-2.1.9" ]; then
+		# The legacy core has no CSQTT_PASSWORD environment fallback.
+		procd_append_param command --password "$password"
+	else
+		procd_append_param command \
+			--runtime-threads "$runtime_threads" \
+			--srtp-mode "$srtp_mode"
+		append_value --custom-turn-ips "$custom_turn_ips"
+		append_value --direct-domains "$direct_domains"
+		append_value --direct-ips "$direct_ips"
+		append_switch --exact-workers "$exact_workers"
+		append_switch --domain-routing "$domain_routing"
+		append_switch --exclude-ru-zones "$exclude_ru_zones"
+		append_switch --template-domains "$template_domains"
+		append_switch --domain-whitelist "$domain_whitelist"
+		append_switch --ip-routing "$ip_routing"
+		append_switch --ip-whitelist "$ip_whitelist"
+	fi
 
 	procd_set_param env \
 		"CSQTT_PASSWORD=$password" \

@@ -516,7 +516,7 @@ function mProfileImport(req) {
 	let link = clean(req.args.link);
 	if (link == "" || length(link) > 16384 || substr(lc(link), 0, 8) != "csqtt://")
 		return { ok: false, error: "invalid CSQTT link" };
-	let decoded = run([BIN, "--decode-link", link]);
+	let decoded = run([resolveBin(), "--decode-link", link]);
 	if (decoded.code != 0)
 		return { ok: false, error: "link authentication or decryption failed" };
 	let payload = clean(decoded.out);
@@ -535,7 +535,7 @@ function mHashesValidate(req) {
 	if (length(vk) > 8192) return { ok: false, error: "VK hash list is too long" };
 	let fingerprint = mainValue(cfg, "fingerprint", "chrome");
 	let clientIds = mainValue(cfg, "client_ids", "");
-	let result = run([BIN, "--validate-vk-hashes", "--vk", vk, "--fingerprint", fingerprint, "--client-ids", clientIds]);
+	let result = run([resolveBin(), "--validate-vk-hashes", "--vk", vk, "--fingerprint", fingerprint, "--client-ids", clientIds]);
 	let hashes = [], valid = 0, captcha = 0, invalid = 0, unavailable = 0;
 	let lines = split(result.out, "\n");
 	for (let i = 0; i < length(lines); i++) {

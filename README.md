@@ -19,7 +19,7 @@ Netis N6 / Xiaomi Mi Router 3G. Ядро: [amurcanov/csqtt](https://github.com/a
 |---|---|---|
 | `csqtt-core-2.1.9` | `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 (`2.1.9-mt7621-r1`) |
 | `csqtt-core-2.5.0` | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ветка 2.5.0, исправленный бинарник 2.5.1 (`2.5.1-mt7621-r1`) |
-| `luci-app-csqtt` | `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель LuCI 2.0-r3 (arch `noarch`) |
+| `luci-app-csqtt` | `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель LuCI 2.0-r4 (arch `noarch`) |
 
 Оба ядра — статические ELF32 MIPS32r2 o32 soft-float (musl), без внешних
 зависимостей, кроме `kmod-tun`. MT7621-патчи: `portable-atomic` вместо
@@ -35,6 +35,13 @@ GitHub, Cloudflare или Google. Результат действует пять
 обёртка ядра всегда попадают в APK с окончаниями строк LF. Исправление
 проверено установкой на реальный Netis N6 v1 с OpenWrt 25.12.5; подробности:
 [`docs/RELEASE-NOTES-2.0-r3.md`](docs/RELEASE-NOTES-2.0-r3.md).
+
+Панель `2.0-r4` исправляет работу выбранного ядра 2.1.9: RPC проверки хешей
+и импорта ссылок теперь использует бинарник из `core_version`, а init-скрипт
+передаёт каждому ядру только поддерживаемые им параметры. Исправление
+проверено на реальном Netis N6 v1: сервис 2.1.9 запущен, 27 воркеров готовы,
+проверка VK-хешей завершилась `3/3 valid`. Подробности:
+[`docs/RELEASE-NOTES-2.0-r4.md`](docs/RELEASE-NOTES-2.0-r4.md).
 
 ## Как устроен выбор ядра
 
