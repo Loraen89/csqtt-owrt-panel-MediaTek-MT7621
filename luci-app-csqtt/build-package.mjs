@@ -1,9 +1,9 @@
-// CSQTT for MediaTek MT7621 — сборка APK-пакетов OpenWrt 25.12 (apk v2 формат).
-// Собирает три пакета в ../dist:
+﻿// CSQTT for MediaTek MT7621 вЂ” СЃР±РѕСЂРєР° APK-РїР°РєРµС‚РѕРІ OpenWrt 25.12 (apk v2 С„РѕСЂРјР°С‚).
+// РЎРѕР±РёСЂР°РµС‚ С‚СЂРё РїР°РєРµС‚Р° РІ ../dist:
 //   csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.1.9)
-//   csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.5.0, отображается как «2.5.1»)
-//   luci-app-csqtt-2.0-openwrt-25.12.apk            (pkg luci-app-csqtt, arch all)
-// Запуск: node luci-app-csqtt/build-package.mjs
+//   csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.5.0, РѕС‚РѕР±СЂР°Р¶Р°РµС‚СЃСЏ РєР°Рє В«2.5.1В»)
+//   luci-app-csqtt-2.0-openwrt-25.12.apk            (pkg luci-app-csqtt, arch noarch)
+// Р—Р°РїСѓСЃРє: node luci-app-csqtt/build-package.mjs
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -107,9 +107,9 @@ const outputDirectory = path.join(project, 'dist');
 fs.mkdirSync(outputDirectory, { recursive: true });
 const results = [];
 
-// --- Ядро 2.1.9 ---
+// --- РЇРґСЂРѕ 2.1.9 ---
 const core219 = readBinary('core219/dist/csqtt-core-2.1.9-mt7621-r1-mipsel_24kc');
-// --- Ядро 2.5.1 (пакет csqtt-core-2.5.0) ---
+// --- РЇРґСЂРѕ 2.5.1 (РїР°РєРµС‚ csqtt-core-2.5.0) ---
 const core251 = readBinary('core251/dist/csqtt-core-2.5.1-mt7621-r1-mipsel_24kc');
 
 for (const spec of [
@@ -138,7 +138,7 @@ for (const spec of [
 	results.push({ output: spec.out, bytes: apk.length, sha256: crypto.createHash('sha256').update(apk).digest('hex') });
 }
 
-// --- Панель LuCI (arch all) ---
+// --- РџР°РЅРµР»СЊ LuCI (arch noarch) ---
 const panelFiles = [];
 walkFiles(path.join(base, 'package', 'root'), '', panelFiles);
 walkFiles(path.join(base, 'package', 'htdocs'), 'www/', panelFiles);
@@ -153,7 +153,7 @@ const panelApk = buildApk({
 	pkgname: 'luci-app-csqtt',
 	pkgver: '2.0-r1',
 	pkgdesc: 'CSQTT LuCI panel, profile-aware service and RPC for MediaTek MT7621 (cores 2.1.9 / 2.5.1)',
-	arch: 'all',
+	arch: 'noarch',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci'],
 	files: panelFiles,
 	lifecycle: panelLifecycle,
