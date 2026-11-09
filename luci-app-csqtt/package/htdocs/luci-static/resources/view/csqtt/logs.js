@@ -2,13 +2,19 @@
 function loadPref(key,def){try{var v=(typeof localStorage!=='undefined')?localStorage.getItem('csqtt.log.'+key):null;return(v==null)?def:v;}catch(e){return def;}}
 function savePref(key,val){try{if(typeof localStorage!=='undefined')
 localStorage.setItem('csqtt.log.'+key,String(val));}catch(e){}}
-function highlight(line){var text=String(line);var parts=[],re=/(\d{2}:\d{2}:\d{2}|\bWARN(?:ING)?\b|\bERROR\b|\bERR\b|\bFAIL(?:ED)?\b)/gi;var idx=0,m;while((m=re.exec(text))!==null){if(m.index>idx)
-parts.push(text.slice(idx,m.index));var tok=m[0],low=tok.toLowerCase(),cls='loghr';if(/^\d\d:\d\d:\d\d$/.test(tok))cls='logtime';else if(low.indexOf('warn')===0)cls='logwarn';else cls='logerr';parts.push(E('span',{class:cls},tok));idx=m.index+tok.length;}
+function logMessage(line){return String(line==null?'':line).replace(/^.*?\s(?:daemon|user)\.[a-z]+\s+run-core\.sh(?:\[\d+\])?:\s*/i,'');}
+function highlight(line){var text=String(line),bodyOffset=text.length-logMessage(text).length;var parts=[],re=/(\d{2}:\d{2}:\d{2}|\bWARN(?:ING)?\b|\bERROR\b|\bERR\b|\bFAIL(?:ED)?\b)/gi;var idx=0,m;while((m=re.exec(text))!==null){if(m.index>idx)
+parts.push(text.slice(idx,m.index));var tok=m[0],low=tok.toLowerCase(),cls='loghr';if(/^\d\d:\d\d:\d\d$/.test(tok))cls='logtime';else if(low.indexOf('warn')===0)cls='logwarn';else cls='logerr';parts.push(m.index<bodyOffset&&cls!=='logtime'?tok:E('span',{class:cls},tok));idx=m.index+tok.length;}
 if(idx<text.length)
 parts.push(text.slice(idx));if(!parts.length)
 parts.push(text);return parts;}
 const CATEGORIES=['all','conn','captcha','failover','errors'];function catLabelFor(v){if(v==='conn')return _('Connection');if(v==='captcha')return _('CAPTCHA');if(v==='failover')return _('Failover / recovery');if(v==='errors')return _('Errors and warnings');return _('All categories');}
-function categoryOf(line){var s=String(line==null?'':line).toLowerCase();if(/\b(error|err|fail|failed|fatal|panic|warn|warning)\b/.test(s))return'errors';if(s.indexOf('captcha')>=0)return'captcha';if(/(failover|failback|switch|switching|cooldown|profile|pool)/.test(s))return'failover';if(/(connect|connection|tun|csqtt0|session|turn|worker|ready|stats|access|handshake)/.test(s))return'conn';return'other';}
+function categoryOf(line){var s=logMessage(line).toLowerCase();
+if(/\b(error|err|fail|failed|fatal|panic|warn|warning|timeout)\b|ошибк|таймаут|не удалось|не состоял/.test(s))return'errors';
+if(s.indexOf('captcha')>=0)return'captcha';
+if(/(failover|failback|switch|switching|cooldown|profile|pool)/.test(s))return'failover';
+if(/(connect|connection|tun|csqtt0|session|turn|worker|ready|stats|access|handshake|статист|воркер|сессия|подключ|туннел)/.test(s))return'conn';
+return'other';}
 function matchesCategory(line,cat){return(!cat||cat==='all')?true:(categoryOf(line)===cat);}
 function groupKey(line){return String(line==null?'':line).replace(/\d{2}:\d{2}:\d{2}(?:[.,]\d+)?/g,'');}
 return view.extend({title:BRAND+' — '+_('Logs'),auto:true,follow:true,wrap:false,font:FONT_DEF,cat:'all',group:false,last:{},preFile:null,preSyslog:null,load:function(){this.auto=true;this.follow=loadPref('follow','1')==='1';this.wrap=loadPref('wrap','0')==='1';this.font=Math.min(FONT_MAX,Math.max(FONT_MIN,parseInt(loadPref('font',FONT_DEF),10)||FONT_DEF));this.cat=loadPref('cat','all');this.group=loadPref('group','0')==='1';return i18n.load().then(function(){});},activeSource:function(){var pane=this.root?this.root.querySelector('[data-tab][data-tab-active="true"]'):null;return(pane&&pane.getAttribute('data-tab')==='syslog')?'syslog':'file';},activePre:function(){return(this.activeSource()==='file')?this.preFile:this.preSyslog;},showError:function(msg){var box=document.getElementById('csqtt-log-err');if(!box)

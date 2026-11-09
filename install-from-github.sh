@@ -14,7 +14,7 @@ REPO='Loraen89/csqtt-owrt-panel-MediaTek-MT7621'
 CORE_CHOICE=''
 REF=''
 DRY_RUN=0
-WORKDIR="/tmp/csqtt-install.$$"
+WORKDIR=''
 
 PANEL_NAME='luci-app-csqtt-2.0-openwrt-25.12.apk'
 CORE219_NAME='csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk'
@@ -87,8 +87,12 @@ command -v apk >/dev/null 2>&1 || {
 	echo 'Этот установщик требует OpenWrt 25.12.x с менеджером apk.' >&2
 	exit 1
 }
+command -v sha256sum >/dev/null 2>&1 || {
+	echo 'Для проверки пакетов нужен sha256sum.' >&2
+	exit 1
+}
 
-mkdir -p "$WORKDIR"
+WORKDIR=$(mktemp -d /tmp/csqtt-install.XXXXXX)
 trap 'rm -rf "$WORKDIR"' EXIT INT TERM
 
 gh_api() {
@@ -233,6 +237,6 @@ rm -f /tmp/luci-indexcache
 /etc/init.d/csqtt enable >/dev/null 2>&1 || true
 
 echo 'Установка завершена.'
-echo 'Панель: LuCI -> Службы -> CSQTT (VK-туннель).'
+echo 'Панель: LuCI -> Службы -> CSQTT-PANEL v2.0.'
 echo "Режим ядра: $SELECTED_CORE"
 echo "Если установлены оба: uci set csqtt.main.core_version='2.1.9|2.5.0|auto'"

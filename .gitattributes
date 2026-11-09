@@ -1,3 +1,6 @@
 *.sh text eol=lf
 *.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+luci-app-csqtt/package/root/usr/share/rpcd/ucode/* text eol=lf
 luci-app-csqtt/package/root/etc/init.d/* text eol=lf

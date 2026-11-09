@@ -200,11 +200,9 @@ function safeProfiles(cfg, runtimeActive, running) {
 	return profiles;
 }
 
-function resolveBin() {
+function resolveProfileBin(cfg, active) {
 	// Приоритет как в init.d resolve_core: ядро выбранного профиля, затем
 	// csqtt.main.core_version, затем 2.5.0 -> 2.1.9 -> legacy.
-	let cfg = uciConfig();
-	let active = chooseProfile(cfg);
 	let pref = active != ""
 		? profileValue(cfg, active, "core_version", mainValue(cfg, "core_version", "auto"))
 		: mainValue(cfg, "core_version", "auto");
@@ -217,6 +215,11 @@ function resolveBin() {
 	if (fileExists(BIN_219))
 		return BIN_219;
 	return BIN;
+}
+
+function resolveBin() {
+	let cfg = uciConfig();
+	return resolveProfileBin(cfg, chooseProfile(cfg));
 }
 
 function binaryVersion() {
@@ -293,6 +296,12 @@ function statusObject() {
 	let rx = interfaceUp ? readNumber("/sys/class/net/" + ifname + "/statistics/rx_bytes") : 0;
 	let tx = interfaceUp ? readNumber("/sys/class/net/" + ifname + "/statistics/tx_bytes") : 0;
 	let workers = profileValue(cfg, active, "workers", mainValue(cfg, "workers", "9"));
+	let address = "";
+	if (interfaceUp) {
+		let result = run(["/sbin/ip", "-4", "addr", "show", "dev", ifname]);
+		let found = match(result.out, regexp("inet ([0-9.]+)[[:space:]/]"));
+		if (result.code == 0 && found != null) address = found[1];
+	}
 	let connected = false;
 	if (proc.running && raw != null && raw.connectivity != null)
 		connected = raw.connectivity.session_established == true;
@@ -320,7 +329,7 @@ function statusObject() {
 	status.profiles = safeProfiles(cfg, active, proc.running);
 	status.tunnel = {
 		interface: ifname,
-		address: mainValue(cfg, "tun_address", ""),
+		address: address,
 		mtu: int(mainValue(cfg, "tun_mtu", "1300")),
 		dns: mainValue(cfg, "dns", "")
 	};
@@ -357,7 +366,8 @@ function statusObject() {
 		pid: proc.pid,
 		enabled: main != null && main.enabled == "1",
 		boot_enabled: run([INIT, "enabled"]).code == 0,
-		configured: active != "" && mainValue(cfg, "vk", "") != "",
+		configured: active != "" && (mainValue(cfg, "vk_hash_mode", "manual") == "auto_js"
+			? mainValue(cfg, "vk_js_token", "") != "" : mainValue(cfg, "vk", "") != ""),
 		interface: ifname,
 		interface_up: interfaceUp,
 		binary_ok: status.version != "unavailable",
@@ -409,8 +419,8 @@ function mLogs(req) {
 	let text = null;
 	if (source == "file") text = readText(LOG_PATH);
 	if (source == "syslog" || text == null) {
-		let result = run([LOGREAD, "-e", "csqtt"]);
-		text = result.out;
+		let result = run([LOGREAD]);
+		text = join("\n", filterLines(split(result.out, "\n"), "csqtt|run-core\\.sh"));
 		source = "syslog";
 	}
 	let lines = tailLines(split(replace(text == null ? "" : text, TRAIL_NL, ""), "\n"), count);
@@ -463,7 +473,7 @@ function mTestConf(req) {
 function mDiag(req) {
 	let cfg = uciConfig(), status = statusObject(), report = configurationReport();
 	let safeMain = {};
-	let keys = ["enabled", "ifname", "selection_mode", "active_profile", "failover",
+	let keys = ["enabled", "ifname", "selection_mode", "failover",
 		"failback", "health_mode", "captcha_policy", "vk_hash_mode", "vk_auth_mode",
 		"workers", "obfs", "turn_transport", "fingerprint", "tun_mtu"];
 	for (let i = 0; i < length(keys); i++)
@@ -471,15 +481,22 @@ function mDiag(req) {
 	let profiles = [];
 	let all = safeProfiles(cfg, chooseProfile(cfg), status.running);
 	for (let i = 0; i < length(all); i++)
-		push(profiles, { id: all[i].id, name: all[i].name, enabled: all[i].enabled,
+		push(profiles, { index: i, enabled: all[i].enabled,
 			priority: all[i].priority, state: all[i].state });
-	let logs = mLogs({ args: { source: "syslog", lines: 100, grep: "" } });
+	// Names, profile IDs and raw logs can contain endpoint addresses or secrets.
+	let safeStatus = {};
+	for (let key in ["daemon_state", "generated_at", "version", "workers", "resources",
+		"rx_bytes", "tx_bytes", "uptime_secs", "reconnects"])
+		safeStatus[key] = status.status[key];
+	safeStatus.running = status.running;
+	safeStatus.connected = status.connected;
 	return { ok: true, instance: "main", bundle: {
 		kind: "csqtt-mt7621-diagnostics", schema: 2, version: binaryVersion(),
 		device: clean(readText("/proc/device-tree/model")), config: safeMain,
-		profiles: profiles, status: status.status, doctor: report.report,
-		log_tail: logs.lines, complete: true,
-		notes: ["Secrets and server addresses are intentionally omitted"]
+		profiles: profiles, status: safeStatus,
+		doctor: { checks: filter(report.report.checks, function(check) { return check.name != "Server profile"; }),
+			compatibility: report.report.compatibility }, complete: true,
+		notes: ["Endpoint fields, profile names/IDs and raw logs are omitted. Raw logs can be exported separately and may contain sensitive data."]
 	} };
 }
 
@@ -554,7 +571,10 @@ function mProfileExport(req) {
 		"&turn_transport=" + percentEncode(profileValue(cfg, id, "turn_transport", "udp"));
 	let vk = mainValue(cfg, "vk", "");
 	if (vk != "") link += "&hashes=" + percentEncode(vk);
-	return { ok: true, instance: "main", link: link };
+	let core = resolveProfileBin(cfg, id) == BIN_219 ? "2.1.9" : "2.5.0";
+	return { ok: true, instance: "main", core_version: core,
+		link: core == "2.1.9" ? link : null,
+		payload: core == "2.1.9" ? null : link };
 }
 
 function mProfileImport(req) {

@@ -13,7 +13,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -f /etc/config/csqtt ] && [ "$KEEP_CONFIG" -eq 1 ]; then
-	cp -f /etc/config/csqtt /etc/config/csqtt.backup 2>/dev/null || true
+	cp -p /etc/config/csqtt /etc/config/csqtt.backup
 fi
 
 if [ -x /etc/init.d/csqtt ]; then
@@ -21,8 +21,16 @@ if [ -x /etc/init.d/csqtt ]; then
 	/etc/init.d/csqtt disable >/dev/null 2>&1 || true
 fi
 
-apk del luci-app-csqtt csqtt-core-2.1.9 csqtt-core-2.5.0 2>/dev/null || \
-	apk del luci-app-csqtt-netis csqtt-core 2>/dev/null || true
+PACKAGES=''
+for package in luci-app-csqtt csqtt-core-2.1.9 csqtt-core-2.5.0 luci-app-csqtt-netis csqtt-core; do
+	if apk info -e "$package" >/dev/null 2>&1; then
+		PACKAGES="$PACKAGES $package"
+	fi
+done
+if [ -n "$PACKAGES" ]; then
+	# shellcheck disable=SC2086
+	apk del $PACKAGES
+fi
 
 rm -f /tmp/luci-indexcache /var/run/csqtt/status.json
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true

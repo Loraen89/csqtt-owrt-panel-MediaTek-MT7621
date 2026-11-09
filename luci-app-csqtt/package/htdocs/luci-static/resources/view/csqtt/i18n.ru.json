@@ -525,7 +525,7 @@
  "no profiles": "нет профилей",
  "none": "нет",
  "not established": "не установлена",
- "of one core": "одного ядра",
+ "of one core": "одного логического ядра",
  "open": "открыть",
  "opened": "открыто",
  "optional": "необязательно",
@@ -575,5 +575,6 @@
  "— none —": "— нет —",
  "— not set —": "— не задано —",
  "— unchanged —": "— не изменять —",
- "“Credentials obtained” means the call link was recognized and anonymous credentials were issued; it does NOT confirm traffic transfer.": "«Данные подключения получены» означает, что ссылка звонка распознана и выданы данные анонимного подключения. Это не подтверждает передачу трафика."
+ "“Credentials obtained” means the call link was recognized and anonymous credentials were issued; it does NOT confirm traffic transfer.": "«Данные подключения получены» означает, что ссылка звонка распознана и выданы данные анонимного подключения. Это не подтверждает передачу трафика.",
+ "Encrypted export requires HTTPS or a browser with WebCrypto. No incompatible open link was generated.": "Для экспорта зашифрованной ссылки нужен HTTPS и браузер с WebCrypto. Несовместимая открытая ссылка не создана."
 }

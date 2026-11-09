@@ -111,4 +111,27 @@ for (const line of sums.trim().split('\n')) {
 	console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}`);
 }
 if (!sumsOk) process.exit(1);
+const panelUpgrade = cm.find(m => m.name === '.post-upgrade');
+if (!panelUpgrade || control.subarray(panelUpgrade.dataOff, panelUpgrade.dataOff + panelUpgrade.size).toString().includes('/etc/init.d/csqtt enable'))
+	throw new Error('An upgrade must preserve the existing boot-autostart setting');
+for (const [filename, pkgname, corePath, expectedBinary] of [
+	['luci-app-csqtt-2.0-openwrt-25.12.apk', 'luci-app-csqtt', null, null],
+	['csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk', 'csqtt-core-2.1.9', 'usr/libexec/csqtt/csqtt-core-2.1.9', '../core219/dist/csqtt-core-2.1.9-mt7621-r1-mipsel_24kc'],
+	['csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk', 'csqtt-core-2.5.0', 'usr/libexec/csqtt/csqtt-core-2.5.0', '../core251/dist/csqtt-core-2.5.1-mt7621-r1-mipsel_24kc'],
+]) {
+	const parts = splitStreams(fs.readFileSync(path.join(DIST, filename)));
+	if (parts.length !== 2) throw new Error('Invalid APK streams: ' + filename);
+	const payload = zlib.gunzipSync(parts[1]);
+	const entries = members(payload);
+	for (const notice of ['LICENSE', 'NOTICE.md']) {
+		const member = entries.find(m => m.name === `usr/share/licenses/${pkgname}/${notice}`);
+		if (!member || member.size === 0) throw new Error('Missing license notice in ' + filename);
+	}
+	if (corePath) {
+		const member = entries.find(m => m.name === corePath);
+		if (!member || !payload.subarray(member.dataOff, member.dataOff + member.size).equals(fs.readFileSync(path.resolve(HERE, expectedBinary))))
+			throw new Error('Core executable changed: ' + filename);
+	}
+}
+console.log('OK   license notices, unchanged core executables and preserved autostart on upgrade');
 console.log('ПАКЕТ_ВАЛИДЕН');

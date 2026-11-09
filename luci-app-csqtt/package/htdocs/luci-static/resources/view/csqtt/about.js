@@ -34,7 +34,7 @@ return view.extend({
 		var status = result && result.status || {};
 		var version = status.version || 'csqtt-client (ядро не установлено)';
 		var rows = [];
-		rows = rows.concat(row(_('LuCI panel'), 'CSQTT-PANEL v2.0 2.0-r9'));
+		rows = rows.concat(row(_('LuCI panel'), 'CSQTT-PANEL v2.0 2.0-r10 (prerelease r10-rc1)'));
 		rows = rows.concat(row(_('Core version'), version));
 		rows = rows.concat(row('Архитектура', 'mipsel_24kc / MediaTek MT7621'));
 		rows = rows.concat(row('Прошивка', 'OpenWrt 25.12'));

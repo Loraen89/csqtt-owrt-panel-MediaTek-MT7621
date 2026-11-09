@@ -7,7 +7,7 @@
 
 | Файл в `dist/` | Содержимое |
 |---|---|
-| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0 2.0-r9 |
+| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0 2.0-r10 (prerelease r10-rc1) |
 | `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 |
 | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1; внутреннее имя пакета `csqtt-core-2.5.0` |
 
@@ -69,3 +69,12 @@ ubus call csqtt access_check
 ```
 
 Лицензия и авторство: [LICENSE](LICENSE), [NOTICE.md](NOTICE.md).
+
+## Кандидат r10-rc1
+
+Этот тег — prerelease на базе r9. Результаты проверки и ограничения: [AUDIT.md](AUDIT.md).
+Стабильный Latest не заменяется. Для установки кандидата из приватного репозитория
+используйте его APK и SHA256SUMS либо install-from-github.sh с параметром
+--ref v2.0-mt7621-r10-rc1 и GITHUB_TOKEN с правом Contents: read.
+
+Экспорт профиля 2.1.9 работает по HTTP. Для зашифрованного экспорта 2.5.1 нужен HTTPS и WebCrypto.

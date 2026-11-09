@@ -108,7 +108,11 @@ for dir in "$SCRIPT_DIR" "$SCRIPT_DIR/dist"; do
 		break
 	fi
 done
-if command -v sha256sum >/dev/null 2>&1 && [ -n "$SUMS_FILE" ]; then
+command -v sha256sum >/dev/null 2>&1 && [ -n "$SUMS_FILE" ] || {
+	echo 'Для установки нужны sha256sum и файл SHA256SUMS.' >&2
+	exit 1
+}
+if [ -n "$SUMS_FILE" ]; then
 	echo 'Проверяю SHA256 выбранных пакетов...'
 	for package in $PACKAGES; do
 		name=$(basename "$package")
@@ -142,6 +146,6 @@ rm -f /tmp/luci-indexcache
 /etc/init.d/csqtt enable >/dev/null 2>&1 || true
 
 echo 'Установка завершена.'
-echo 'Панель: LuCI -> Службы -> CSQTT (VK-туннель).'
+echo 'Панель: LuCI -> Службы -> CSQTT-PANEL v2.0.'
 echo "Режим ядра: $SELECTED_CORE"
 echo "Если установлены оба: uci set csqtt.main.core_version='2.1.9|2.5.0|auto'"

@@ -68,7 +68,7 @@ function tar(files, checksums = false) {
 	return Buffer.concat([...blocks, Buffer.alloc(1024)]);
 }
 
-function buildApk({ pkgname, pkgver, pkgdesc, arch, depends, files, lifecycle }) {
+function buildApk({ pkgname, pkgver, pkgdesc, arch, depends, files, lifecycle, upgradeLifecycle = lifecycle }) {
 	const data = zlib.gzipSync(tar(files, true), { level: 9 });
 	const datahash = crypto.createHash('sha256').update(data).digest('hex');
 	const installedSize = files.reduce((total, file) => total + file[1].length, 0);
@@ -78,7 +78,7 @@ function buildApk({ pkgname, pkgver, pkgdesc, arch, depends, files, lifecycle })
 	const controlEntries = [['.PKGINFO', metadata]];
 	if (lifecycle) {
 		controlEntries.push(['.post-install', lifecycle, 0o755]);
-		controlEntries.push(['.post-upgrade', lifecycle, 0o755]);
+		controlEntries.push(['.post-upgrade', upgradeLifecycle, 0o755]);
 	}
 	const control = tar(controlEntries);
 	return Buffer.concat([
@@ -102,7 +102,7 @@ function walkFiles(directory, prefix, files, skip = new Set()) {
 			// APK can be assembled on Windows, where the worktree may contain CRLF
 			// even though Git stores LF. OpenWrt executes these files directly and
 			// interprets a CR in "#!/bin/sh\r" as part of the interpreter path.
-			if (relative.startsWith('etc/init.d/') || relative.startsWith('usr/libexec/') && relative.endsWith('.sh'))
+			if (relative.startsWith('etc/') || relative.startsWith('usr/share/') || relative.endsWith('.sh') || relative.startsWith('www/'))
 				data = Buffer.from(data.toString('utf8').replace(/\r\n?/g, '\n'));
 			files.push([relative, data, mode]);
 		}
@@ -112,6 +112,12 @@ function walkFiles(directory, prefix, files, skip = new Set()) {
 const outputDirectory = path.join(project, 'dist');
 fs.mkdirSync(outputDirectory, { recursive: true });
 const results = [];
+function licenseFiles(pkgname) {
+	return ['LICENSE', 'NOTICE.md'].map(name => [
+		`usr/share/licenses/${pkgname}/${name}`,
+		Buffer.from(fs.readFileSync(path.join(project, name), 'utf8').replace(/\r\n?/g, '\n')), 0o644
+	]);
+}
 
 // --- РЇРґСЂРѕ 2.1.9 ---
 const core219 = readBinary('core219/dist/csqtt-core-2.1.9-mt7621-r1-mipsel_24kc');
@@ -138,7 +144,7 @@ for (const spec of [
 		pkgdesc: spec.pkgdesc,
 		arch: 'mipsel_24kc',
 		depends: ['kmod-tun'],
-		files: [[spec.file, spec.data, 0o755]],
+		files: [[spec.file, spec.data, 0o755], ...licenseFiles(spec.pkgname)],
 	});
 	fs.writeFileSync(path.join(outputDirectory, spec.out), apk);
 	results.push({ output: spec.out, bytes: apk.length, sha256: crypto.createHash('sha256').update(apk).digest('hex') });
@@ -148,6 +154,7 @@ for (const spec of [
 const panelFiles = [];
 walkFiles(path.join(base, 'package', 'root'), '', panelFiles);
 walkFiles(path.join(base, 'package', 'htdocs'), 'www/', panelFiles);
+panelFiles.push(...licenseFiles('luci-app-csqtt'));
 const panelLifecycle = Buffer.from(`#!/bin/sh
 [ -x /etc/init.d/csqtt ] || exit 0
 /etc/init.d/csqtt enable >/dev/null 2>&1 || true
@@ -157,12 +164,13 @@ exit 0
 `);
 const panelApk = buildApk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r9',
+	pkgver: '2.0-r10',
 	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
 	arch: 'noarch',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
 	files: panelFiles,
 	lifecycle: panelLifecycle,
+	upgradeLifecycle: Buffer.from(panelLifecycle.toString().replace('/etc/init.d/csqtt enable >/dev/null 2>&1 || true\n', '')),
 });
 fs.writeFileSync(path.join(outputDirectory, 'luci-app-csqtt-2.0-openwrt-25.12.apk'), panelApk);
 results.push({ output: 'luci-app-csqtt-2.0-openwrt-25.12.apk', bytes: panelApk.length, sha256: crypto.createHash('sha256').update(panelApk).digest('hex') });

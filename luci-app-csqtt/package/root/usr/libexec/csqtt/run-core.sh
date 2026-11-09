@@ -2,6 +2,9 @@
 
 set -eu
 
+# Every procd respawn must discard the previous process's session evidence.
+rm -f /var/run/csqtt/status.json /var/run/csqtt/access-check.json /var/run/csqtt/cpu-sample.json
+
 startup_wait="${CSQTT_STARTUP_WAIT:-180}"
 case "$startup_wait" in ''|*[!0-9]*) startup_wait=180;; esac
 

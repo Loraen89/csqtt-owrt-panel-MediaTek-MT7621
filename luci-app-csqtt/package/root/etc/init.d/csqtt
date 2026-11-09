@@ -62,13 +62,15 @@ consider_profile() {
 }
 
 select_profile() {
-	local mode active type enabled
+	local mode active type enabled peer password
 	config_get mode main selection_mode manual
 	config_get active main active_profile
 	if [ "$mode" = "manual" ] && [ -n "$active" ]; then
 		config_get type "$active" TYPE
 		config_get_bool enabled "$active" enabled 1
-		if [ "$type" = "server" ] && [ "$enabled" = "1" ]; then
+		config_get peer "$active" peer
+		config_get password "$active" password
+		if [ "$type" = "server" ] && [ "$enabled" = "1" ] && [ -n "$peer" ] && [ -n "$password" ]; then
 			SELECTED_PROFILE="$active"
 			return 0
 		fi
