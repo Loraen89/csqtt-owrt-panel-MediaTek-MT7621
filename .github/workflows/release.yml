@@ -1,0 +1,51 @@
+name: Publish MT7621 release
+
+on:
+  push:
+    tags:
+      - 'v2.0-mt7621-r*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged sources
+        uses: actions/checkout@v4
+
+      - name: Verify release checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          assets=(
+            dist/csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk
+            dist/csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk
+            dist/luci-app-csqtt-2.0-openwrt-25.12.apk
+            dist/SHA256SUMS
+            install-from-github.sh
+            install-csqtt.sh
+            uninstall-csqtt.sh
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release edit "$tag" \
+              --draft=false \
+              --latest \
+              --title 'CSQTT 2.0-r2 для MediaTek MT7621' \
+              --notes-file docs/RELEASE-NOTES-2.0-r2.md
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --latest \
+              --title 'CSQTT 2.0-r2 для MediaTek MT7621' \
+              --notes-file docs/RELEASE-NOTES-2.0-r2.md
+          fi
