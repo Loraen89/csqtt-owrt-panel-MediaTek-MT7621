@@ -47,3 +47,15 @@
 
 - `interim-subproxy.mjs` — runtime-переключение `Main Proxy` → `Sub Proxy` через API clash,
   чтобы LAN/DNS работали, пока CSQTT ждёт сервер. Конфиг не меняется.
+- `interim-direct.mjs` — **актуальное** интерим-состояние: clash остановлен+disabled,
+  dnsmasq возвращён на WAN-DNS. LAN ходит напрямую. Применено, т.к. мертвы оба прокси-пути
+  (сервер CSQTT + истёкшая подписка BURGER).
+
+## Позднейшая диагностика (2026-11-09, вечер)
+
+- `probe-state.mjs` — быстрая сверка состояния роутера с целевым (прошивка, пакеты, сервисы, сеть).
+- `fix-clash.mjs` — возврат clash в enabled+running, проверка csqtt0 и ноги CSQTT.
+- `diag-clash-groups.mjs` — группы clash, живость членов, файл провайдера.
+- `diag-subproxy.mjs` — члены Sub Proxy и delay-тесты (обнаружено: только инфо-узлы!).
+- `diag-provider.mjs` — содержимое `lastdep.yaml`: заглушка Remnawave = подписка истекла.
+- `diag-pc-path.mjs` — почему LAN-клиент не выходит в интернет (проверка nft/NAT/маршрутов роутера).
