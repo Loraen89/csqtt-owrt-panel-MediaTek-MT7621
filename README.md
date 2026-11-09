@@ -7,7 +7,7 @@
 
 | Файл в `dist/` | Содержимое |
 |---|---|
-| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0 2.0-r8 |
+| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0 2.0-r9 |
 | `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 |
 | `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1; внутреннее имя пакета `csqtt-core-2.5.0` |
 

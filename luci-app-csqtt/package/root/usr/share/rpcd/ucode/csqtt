@@ -10,6 +10,7 @@ const UCI = "/sbin/uci";
 const LOGREAD = "/sbin/logread";
 const STATUS_PATH = "/var/run/csqtt/status.json";
 const ACCESS_STATUS_PATH = "/var/run/csqtt/access-check.json";
+const CPU_SAMPLE_PATH = "/var/run/csqtt/cpu-sample.json";
 const LOG_PATH = "/var/log/csqtt.log";
 const IFNAME_RE = regexp("^[A-Za-z0-9_.-]{1,15}$");
 const PROFILE_RE = regexp("^[A-Za-z0-9_]+$");
@@ -239,6 +240,47 @@ function processInfo() {
 	return { running: pid != "", pid: pid };
 }
 
+function processResources(proc) {
+	let resources = { process_cpu_percent: null, process_rss_kb: null };
+	if (!proc.running || match(proc.pid, regexp("^[0-9]+$")) == null)
+		return resources;
+	let stat = readText("/proc/" + proc.pid + "/stat");
+	let memory = readText("/proc/" + proc.pid + "/status");
+	let system = readText("/proc/stat");
+	if (stat == null || memory == null || system == null) return resources;
+	// comm is parenthesized and may contain spaces or closing parentheses.
+	let processMatch = match(trim(stat), regexp("^[0-9]+ \\(.*\\) (.*)$"));
+	let rssMatch = match(memory, regexp("VmRSS:[[:space:]]+([0-9]+)"));
+	if (rssMatch != null) resources.process_rss_kb = int(rssMatch[1]);
+	if (processMatch == null) return resources;
+	let fields = split(processMatch[1], regexp("\\s+"));
+	if (length(fields) < 20) return resources;
+	let processTicks = int(fields[11]) + int(fields[12]);
+	let startTicks = int(fields[19]);
+	let lines = split(trim(system), "\n");
+	let aggregate = split(trim(lines[0]), regexp("\\s+"));
+	if (aggregate[0] != "cpu" || length(aggregate) < 9) return resources;
+	let totalTicks = 0, cores = 0;
+	// guest and guest_nice are already included in user and nice.
+	for (let i = 1; i <= 8; i++) totalTicks += int(aggregate[i]);
+	for (let i = 1; i < length(lines); i++)
+		if (match(lines[i], regexp("^cpu[0-9]+ ")) != null) cores++;
+	if (cores < 1) return resources;
+	let previous = parseJson(readText(CPU_SAMPLE_PATH));
+	if (previous != null && previous.pid == proc.pid && previous.start_ticks == startTicks &&
+		previous.cores == cores && totalTicks > previous.total_ticks && processTicks >= previous.process_ticks) {
+		// 100% means one logical CPU; a multithreaded process can exceed 100%.
+		resources.process_cpu_percent = 100.0 * cores *
+			(processTicks - previous.process_ticks) / (totalTicks - previous.total_ticks);
+	} else if (previous != null && previous.pid == proc.pid && previous.start_ticks == startTicks &&
+		previous.total_ticks == totalTicks) {
+		resources.process_cpu_percent = previous.cpu_percent;
+	}
+	writeJson(CPU_SAMPLE_PATH, { pid: proc.pid, start_ticks: startTicks, cores: cores,
+		process_ticks: processTicks, total_ticks: totalTicks, cpu_percent: resources.process_cpu_percent });
+	return resources;
+}
+
 function statusObject() {
 	let cfg = uciConfig();
 	let proc = processInfo();
@@ -306,7 +348,7 @@ function statusObject() {
 	status.rx_bytes = rx;
 	status.tx_bytes = tx;
 	status.reconnects = raw != null && raw.reconnects != null ? raw.reconnects : 0;
-	if (status.resources == null) status.resources = {};
+	status.resources = processResources(proc);
 	return {
 		instance: "main",
 		code: connected ? 0 : (proc.running ? 1 : 2),
