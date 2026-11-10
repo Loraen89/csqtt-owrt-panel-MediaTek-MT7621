@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out tagged sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Verify release checksums
         working-directory: dist
@@ -24,28 +24,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
+          set -eu
           tag="${GITHUB_REF_NAME}"
-          assets=(
-            dist/csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk
-            dist/csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk
-            dist/luci-app-csqtt-2.0-openwrt-25.12.apk
-            dist/SHA256SUMS
-            install-from-github.sh
-            install-csqtt.sh
-            uninstall-csqtt.sh
-          )
+          case "$tag" in
+            *-rc*|*-alpha*|*-beta*) prerelease=true; latest=false ;;
+            *) prerelease=false; latest=true ;;
+          esac
+          title="CSQTT-PANEL v2.0 — ${tag#v2.0-mt7621-}"
+          set -- \
+            dist/csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk \
+            dist/csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk \
+            dist/luci-app-csqtt-2.0-openwrt-25.12.apk \
+            dist/SHA256SUMS \
+            install-from-github.sh install-csqtt.sh uninstall-csqtt.sh \
+            README.md LICENSE NOTICE.md SECURITY.md
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release upload "$tag" "$@" --clobber
             gh release edit "$tag" \
-              --draft=false \
-              --latest \
-              --title 'CSQTT 2.0-r4 для MediaTek MT7621' \
-              --notes-file docs/RELEASE-NOTES-2.0-r4.md
+              --draft=false --prerelease="$prerelease" --latest="$latest" \
+              --title "$title" --notes-file README.md
           else
-            gh release create "$tag" "${assets[@]}" \
-              --latest \
-              --title 'CSQTT 2.0-r4 для MediaTek MT7621' \
-              --notes-file docs/RELEASE-NOTES-2.0-r4.md
+            gh release create "$tag" "$@" \
+              --prerelease="$prerelease" --latest="$latest" \
+              --title "$title" --notes-file README.md
           fi

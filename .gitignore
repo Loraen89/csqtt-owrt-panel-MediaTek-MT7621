@@ -10,6 +10,25 @@ core251/source/core/target/
 core*/source/core/target/
 core*/target/
 deploy-backups/
+backups/
+graphify-out/
+.cache/
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+
+# Local credentials and router exports must not enter release sources.
+.env
+.env.*
+!.env.example
+secrets/
+credentials.json
+hosts.yml
+*.key
+*.pem
+cookies.txt
+*.backup
 
 # Logs
 *.log
