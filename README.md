@@ -5,8 +5,16 @@
 VK/Одноклассников для передачи трафика, в том числе в условиях сетевых ограничений
 и «белых списков». Доступность зависит от сервера, оператора и выбранного транспорта.
 
-Эта сборка предназначена для **MediaTek MT7621**, **OpenWrt 25.12.x** и архитектуры
-`mipsel_24kc`. Проверена на Xiaomi Mi Router 3G; также поддерживается Netis N6 v1.
+Эта сборка предназначена для **MediaTek MT7621** и архитектуры `mipsel_24kc`.
+Поддерживаются два целевых релиза OpenWrt:
+**25.12.x** (пакеты `*.apk`, менеджер `apk`) и **24.10.x** (пакеты `*.ipk`, менеджер `opkg`).
+Проверена на Xiaomi Mi Router 3G; также поддерживается Netis N6 v1.
+
+> ⚠️ **Не проверялся на роутерах.** Поддержка OpenWrt 24.10.x (IPK/opkg) и
+> выпуск r11-rc1 собраны и проверены только статически (структура пакетов,
+> контрольные суммы, воспроизводимость сборки, синтаксис скриптов, песочница
+> установщиков). Установка и работа на реальном устройстве с 24.10.x ещё не
+> подтверждены — сохраните резервную копию перед обновлением.
 
 **Ядро и первоисточник:** [amurcanov/csqtt](https://github.com/amurcanov/csqtt).
 Этот репозиторий содержит адаптацию панели и упаковку для OpenWrt/MT7621;
@@ -34,9 +42,30 @@ VK/Одноклассников для передачи трафика, в то�
 ## Установка из репозитория
 
 Публичные файлы можно скачать без GitHub-аккаунта и токена. Команды выполняются
-**по SSH на роутере** с OpenWrt 25.12.x, пакетным менеджером `apk` и доступом в интернет.
+**по SSH на роутере** с доступом в интернет. Установщик сам определяет пакетный
+менеджер устройства (`apk` для OpenWrt 25.12.x, `opkg` для OpenWrt 24.10.x) и
+берёт соответствующий набор пакетов из одного релиза.
 
-### Проверенный кандидат r10-rc1
+### Установка на OpenWrt 25.12.x (apk)
+
+```sh
+apk add curl ca-bundle
+curl -fsSL -o /tmp/install-from-github.sh \
+  https://raw.githubusercontent.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/main/install-from-github.sh
+ash /tmp/install-from-github.sh --core both
+```
+
+### Установка на OpenWrt 24.10.x (opkg)
+
+```sh
+opkg update
+opkg install curl ca-bundle
+curl -fsSL -o /tmp/install-from-github.sh \
+  https://raw.githubusercontent.com/Loraen89/csqtt-owrt-panel-MediaTek-MT7621/main/install-from-github.sh
+ash /tmp/install-from-github.sh --core both
+```
+
+### Проверенный кандидат r10-rc1 (только 25.12.x)
 
 ```sh
 apk add curl ca-bundle
@@ -64,15 +93,20 @@ ash /tmp/install-from-github.sh --core both
 Для приватных зеркал поддерживается необязательная переменная `GITHUB_TOKEN`
 с разрешением Contents: read; в публичном репозитории она не нужна.
 
-### Ручная установка APK
+### Ручная установка пакетов
 
-Скачайте APK, `SHA256SUMS` и `install-csqtt.sh` из одного выпуска в общую папку
-`/tmp/csqtt` на роутере. Для двух ядер нужны все три APK, для одного — панель и выбранное ядро:
+Скачайте пакеты (`*.apk` для OpenWrt 25.12.x или `*.ipk` для OpenWrt 24.10.x),
+`SHA256SUMS` и `install-csqtt.sh` из одного выпуска в общую папку
+`/tmp/csqtt` на роутере. Для двух ядер нужны все три пакета, для одного — панель
+и выбранное ядро:
 
 ```sh
 cd /tmp/csqtt
 ash install-csqtt.sh --core both
 ```
+
+Скрипт сам выберет `*.apk` (OpenWrt 25.12.x) или `*.ipk` (OpenWrt 24.10.x)
+по доступному пакетному менеджеру.
 
 ## Совместимость с прокси-клиентами
 
@@ -85,9 +119,12 @@ ash install-csqtt.sh --core both
 
 | Файл в `dist/` | Назначение |
 |---|---|
-| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0, кандидат 2.0-r10 |
-| `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 |
-| `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1; имя пакета `csqtt-core-2.5.0` |
+| `luci-app-csqtt-2.0-openwrt-25.12.apk` | Панель CSQTT-PANEL v2.0 для OpenWrt 25.12.x, кандидат 2.0-r10 |
+| `csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.1.9 для OpenWrt 25.12.x |
+| `csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk` | Ядро 2.5.1 для OpenWrt 25.12.x; имя пакета `csqtt-core-2.5.0` |
+| `luci-app-csqtt-2.0-openwrt-24.10.ipk` | Панель CSQTT-PANEL v2.0 для OpenWrt 24.10.x |
+| `csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk` | Ядро 2.1.9 для OpenWrt 24.10.x |
+| `csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk` | Ядро 2.5.1 для OpenWrt 24.10.x; имя пакета `csqtt-core-2.5.0` |
 
 Откройте **LuCI → Службы → CSQTT-PANEL v2.0 → Профили** и импортируйте ссылку.
 
@@ -106,14 +143,12 @@ ash install-csqtt.sh --core both
 
 Исходники ядер: `core219/` и `core251/`. Для пересборки нужны Rust, Zig и musl runtime
 из OpenWrt SDK. Скрипты принимают путь к установленным инструментам:
-
 ```powershell
 powershell -File core219/build-mips.ps1 -Jobs 4 -ToolingPath D:/csqtt-tooling
 powershell -File core251/build-mips.ps1 -Jobs 4 -ToolingPath D:/csqtt-tooling
 ```
 
-Первую сборку с загрузкой зависимостей выполняйте с `-Online`. После появления
-бинарников в `core219/dist/` и `core251/dist/`:
+Первую сборку с загрузкой зависимостей выполняйте с `-Online`. После появления бинарников в `core219/dist/` и `core251/dist/` сборщик создаст шесть пакетов — по три для OpenWrt 25.12.x (`*.apk`) и 24.10.x (`*.ipk`):
 
 ```sh
 node luci-app-csqtt/build-package.mjs

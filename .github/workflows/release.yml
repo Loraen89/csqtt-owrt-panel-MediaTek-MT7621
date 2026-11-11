@@ -35,6 +35,9 @@ jobs:
             dist/csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk \
             dist/csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk \
             dist/luci-app-csqtt-2.0-openwrt-25.12.apk \
+            dist/csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk \
+            dist/csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk \
+            dist/luci-app-csqtt-2.0-openwrt-24.10.ipk \
             dist/SHA256SUMS \
             install-from-github.sh install-csqtt.sh uninstall-csqtt.sh \
             README.md LICENSE NOTICE.md SECURITY.md

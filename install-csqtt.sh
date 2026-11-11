@@ -1,6 +1,9 @@
 #!/bin/ash
-# CSQTT для MediaTek MT7621 (OpenWrt 25.12, apk) — локальная установка.
-# Устанавливает панель luci-app-csqtt и выбранное ядро из APK-файлов,
+# CSQTT для MediaTek MT7621 — локальная установка.
+# Поддерживает два целевых релиза OpenWrt:
+#   25.12.x — пакетный менеджер apk (файлы *.apk из dist);
+#   24.10.x — пакетный менеджер opkg (файлы *.ipk из dist).
+# Устанавливает панель luci-app-csqtt и выбранное ядро из пакетов,
 # лежащих рядом со скриптом или в каталоге dist.
 set -eu
 
@@ -73,14 +76,22 @@ find_package() {
 	return 1
 }
 
-command -v apk >/dev/null 2>&1 || {
-	echo 'Этот установщик требует OpenWrt 25.12.x с менеджером apk.' >&2
+command -v apk >/dev/null 2>&1 && PKG_MGR='apk'
+command -v opkg >/dev/null 2>&1 && PKG_MGR='opkg'
+if [ -z "${PKG_MGR:-}" ]; then
+	echo 'Не найден пакетный менеджер: требуется OpenWrt 25.12.x (apk) или 24.10.x (opkg).' >&2
 	exit 1
-}
-
-PANEL_NAME='luci-app-csqtt-2.0-openwrt-25.12.apk'
-CORE219_NAME='csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk'
-CORE251_NAME='csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk'
+fi
+if [ "$PKG_MGR" = 'apk' ]; then
+	PANEL_NAME='luci-app-csqtt-2.0-openwrt-25.12.apk'
+	CORE219_NAME='csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk'
+	CORE251_NAME='csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk'
+else
+	PANEL_NAME='luci-app-csqtt-2.0-openwrt-24.10.ipk'
+	CORE219_NAME='csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk'
+	CORE251_NAME='csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk'
+fi
+echo "Пакетный менеджер: $PKG_MGR"
 
 PANEL_APK=$(find_package "$PANEL_NAME") || {
 	echo "Не найден пакет панели $PANEL_NAME рядом со скриптом или в dist." >&2
@@ -129,7 +140,15 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # shellcheck disable=SC2086
-apk add --allow-untrusted $PACKAGES
+if [ "$PKG_MGR" = 'apk' ]; then
+	apk add --allow-untrusted $PACKAGES
+else
+	opkg install $PACKAGES || {
+		echo 'opkg не смог установить пакеты. Проверьте доступ к фидам OpenWrt 24.10:' >&2
+		echo 'перед установкой выполните: opkg update' >&2
+		exit 1
+	}
+fi
 
 case "$CORE_CHOICE" in
 	2.1.9) SELECTED_CORE='2.1.9' ;;
@@ -141,7 +160,7 @@ if command -v uci >/dev/null 2>&1; then
 	uci -q commit csqtt
 fi
 
-rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-indexcache* 2>/dev/null || true
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true
 /etc/init.d/csqtt enable >/dev/null 2>&1 || true
 

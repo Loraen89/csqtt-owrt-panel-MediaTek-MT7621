@@ -6,7 +6,7 @@
 #
 #   ash install-from-github.sh [--core 2.1.9|2.5.0|both]
 #
-# Требуется curl (apk add curl). По умолчанию берутся файлы последнего
+# Требуется curl (apk add curl | opkg install curl). По умолчанию берутся файлы последнего
 # релиза; с --ref — файлы dist/ из указанной ветки или тега.
 set -eu
 
@@ -16,10 +16,11 @@ REF=''
 DRY_RUN=0
 WORKDIR=''
 
-PANEL_NAME='luci-app-csqtt-2.0-openwrt-25.12.apk'
-CORE219_NAME='csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk'
-CORE251_NAME='csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk'
+PANEL_NAME=''
+CORE219_NAME=''
+CORE251_NAME=''
 SUMS_NAME='SHA256SUMS'
+PKG_MGR=''
 
 usage() {
 	cat <<'EOF'
@@ -80,13 +81,25 @@ case "$CORE_CHOICE" in
 esac
 
 command -v curl >/dev/null 2>&1 || {
-	echo 'Нужен curl: apk add curl' >&2
+	echo 'Нужен curl: apk add curl | opkg install curl' >&2
 	exit 1
 }
-command -v apk >/dev/null 2>&1 || {
-	echo 'Этот установщик требует OpenWrt 25.12.x с менеджером apk.' >&2
+command -v apk >/dev/null 2>&1 && PKG_MGR='apk'
+command -v opkg >/dev/null 2>&1 && PKG_MGR='opkg'
+if [ -z "$PKG_MGR" ]; then
+	echo 'Не найден пакетный менеджер: требуется OpenWrt 25.12.x (apk) или 24.10.x (opkg).' >&2
 	exit 1
-}
+fi
+if [ "$PKG_MGR" = 'apk' ]; then
+	PANEL_NAME='luci-app-csqtt-2.0-openwrt-25.12.apk'
+	CORE219_NAME='csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk'
+	CORE251_NAME='csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk'
+else
+	PANEL_NAME='luci-app-csqtt-2.0-openwrt-24.10.ipk'
+	CORE219_NAME='csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk'
+	CORE251_NAME='csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk'
+fi
+echo "Пакетный менеджер: $PKG_MGR"
 command -v sha256sum >/dev/null 2>&1 || {
 	echo 'Для проверки пакетов нужен sha256sum.' >&2
 	exit 1
@@ -220,7 +233,15 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # shellcheck disable=SC2086
-apk add --allow-untrusted $PACKAGES
+if [ "$PKG_MGR" = 'apk' ]; then
+	apk add --allow-untrusted $PACKAGES
+else
+	opkg install $PACKAGES || {
+		echo 'opkg не смог установить пакеты. Проверьте доступ к фидам OpenWrt 24.10:' >&2
+		echo 'перед установкой выполните: opkg update' >&2
+		exit 1
+	}
+fi
 
 case "$CORE_CHOICE" in
 	2.1.9) SELECTED_CORE='2.1.9' ;;
@@ -232,7 +253,7 @@ if command -v uci >/dev/null 2>&1; then
 	uci -q commit csqtt
 fi
 
-rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-indexcache* 2>/dev/null || true
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true
 /etc/init.d/csqtt enable >/dev/null 2>&1 || true
 

@@ -21,18 +21,38 @@ if [ -x /etc/init.d/csqtt ]; then
 	/etc/init.d/csqtt disable >/dev/null 2>&1 || true
 fi
 
+if command -v apk >/dev/null 2>&1; then
+	PKG_MGR='apk'
+elif command -v opkg >/dev/null 2>&1; then
+	PKG_MGR='opkg'
+else
+	echo 'Не найден пакетный менеджер: требуется OpenWrt 25.12.x (apk) или 24.10.x (opkg).' >&2
+	exit 1
+fi
+
 PACKAGES=''
 for package in luci-app-csqtt csqtt-core-2.1.9 csqtt-core-2.5.0 luci-app-csqtt-netis csqtt-core; do
-	if apk info -e "$package" >/dev/null 2>&1; then
-		PACKAGES="$PACKAGES $package"
+	if [ "$PKG_MGR" = 'apk' ]; then
+		if apk info -e "$package" >/dev/null 2>&1; then
+			PACKAGES="$PACKAGES $package"
+		fi
+	else
+		if opkg status "$package" 2>/dev/null | grep -q '^Status:.*installed'; then
+			PACKAGES="$PACKAGES $package"
+		fi
 	fi
 done
 if [ -n "$PACKAGES" ]; then
 	# shellcheck disable=SC2086
-	apk del $PACKAGES
+	if [ "$PKG_MGR" = 'apk' ]; then
+		apk del $PACKAGES
+	else
+		opkg remove $PACKAGES
+	fi
 fi
 
-rm -f /tmp/luci-indexcache /var/run/csqtt/status.json
+rm -rf /tmp/luci-indexcache* 2>/dev/null || true
+rm -f /var/run/csqtt/status.json
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true
 
 if [ "$KEEP_CONFIG" -eq 0 ]; then

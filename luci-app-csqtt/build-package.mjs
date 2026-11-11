@@ -1,9 +1,13 @@
-// CSQTT for MediaTek MT7621 вЂ” СЃР±РѕСЂРєР° APK-РїР°РєРµС‚РѕРІ OpenWrt 25.12 (apk v2 С„РѕСЂРјР°С‚).
-// РЎРѕР±РёСЂР°РµС‚ С‚СЂРё РїР°РєРµС‚Р° РІ ../dist:
+// CSQTT for MediaTek MT7621 — Сборка APK-пакетов OpenWrt 25.12 (apk v2 формат)
+// и IPK-пакетов OpenWrt 24.10 (opkg).
+// Собирает шесть пакетов в ../dist:
 //   csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.1.9)
-//   csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.5.0, РѕС‚РѕР±СЂР°Р¶Р°РµС‚СЃСЏ РєР°Рє В«2.5.1В»)
+//   csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk  (pkg csqtt-core-2.5.0, отображается как «2.5.1»)
 //   luci-app-csqtt-2.0-openwrt-25.12.apk            (pkg luci-app-csqtt, arch noarch)
-// Р—Р°РїСѓСЃРє: node luci-app-csqtt/build-package.mjs
+//   csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk  (pkg csqtt-core-2.1.9)
+//   csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk  (pkg csqtt-core-2.5.0, отображается как «2.5.1»)
+//   luci-app-csqtt-2.0-openwrt-24.10.ipk            (pkg luci-app-csqtt, arch all)
+// Запуск: node luci-app-csqtt/build-package.mjs
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -55,7 +59,7 @@ function tar(files, checksums = false) {
 		for (const directory of [...directories].sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b)))
 			entry(directory + '/', Buffer.alloc(0), 0o755, '5');
 	}
-	for (const [name, data, mode = 0o644] of files) {
+	for (const [name, data, mode = 0o644, type] of files) {
 		if (checksums) {
 			const content = 'APK-TOOLS.checksum.SHA1=' + crypto.createHash('sha1').update(data).digest('hex') + '\n';
 			let length = Buffer.byteLength(content) + 3;
@@ -63,7 +67,7 @@ function tar(files, checksums = false) {
 				length = Buffer.byteLength(content) + String(length).length + 1;
 			entry('.pax/' + crypto.createHash('sha1').update(name).digest('hex'), `${length} ${content}`, 0o644, 'x');
 		}
-		entry(name, data, mode);
+		entry(name, data, mode, type == null ? '0' : type);
 	}
 	return Buffer.concat([...blocks, Buffer.alloc(1024)]);
 }
@@ -86,6 +90,98 @@ function buildApk({ pkgname, pkgver, pkgdesc, arch, depends, files, lifecycle, u
 		data,
 	]);
 }
+
+// --- IPK (opkg, OpenWrt 24.10) ---
+// ipk = ar-архив: debian-binary, control.tar.gz, data.tar.gz.
+// Путь внутри tar задаётся с префиксом './', как делает ipkg-build.
+const IPK_MTIME = 1793577600;
+
+function arHeader(name, size, mode = 0o100644) {
+	const header = Buffer.alloc(60);
+	header.write(name.padEnd(16, ' '), 0, 16, 'ascii');
+	header.write(IPK_MTIME.toString(8).padStart(11, '0') + ' ', 16, 12, 'ascii');
+	header.write('0'.padEnd(6, ' '), 28, 6, 'ascii');
+	header.write('0'.padEnd(6, ' '), 34, 6, 'ascii');
+	header.write(mode.toString(8).padStart(7, '0') + ' ', 40, 8, 'ascii');
+	header.write(size.toString(8).padStart(10, '0') + ' ', 48, 10, 'ascii');
+	header.write('`\n', 58, 2, 'ascii');
+	return header;
+}
+
+function ar(members) {
+	const blocks = [Buffer.from('!<arch>\n')];
+	for (const [name, data, mode] of members) {
+		blocks.push(arHeader(name, data.length, mode), data);
+		if (data.length % 2) blocks.push(Buffer.from('\n'));
+	}
+	return Buffer.concat(blocks);
+}
+
+function buildIpk({ pkgname, pkgver, pkgdesc, arch, depends, files, postinst, prerm, postrm, conffiles }) {
+	const installedSize = files.reduce((total, file) => total + file[1].length, 0);
+	let control = `Package: ${pkgname}\n`
+		+ `Version: ${pkgver}\n`
+		+ `Depends: ${depends.join(', ')}\n`
+		+ `Architecture: ${arch}\n`
+		+ `Installed-Size: ${installedSize}\n`
+		+ `Section: ${pkgname.startsWith('luci-') ? 'luci' : 'net'}\n`
+		+ `Priority: optional\n`
+		+ `Maintainer: Loraen89\n`
+		+ `License: PolyForm-Noncommercial-1.0.0\n`
+		+ `Description: ${pkgdesc}\n`;
+	const controlMembers = [['./control', Buffer.from(control), 0o644]];
+	if (conffiles && conffiles.length) {
+		controlMembers.push(['./conffiles', Buffer.from(conffiles.map((name) => '/' + name.replace(/^\.?\//, '')).join('\n') + '\n'), 0o644]);
+	}
+	for (const [member, text] of [['./postinst', postinst], ['./prerm', prerm], ['./postrm', postrm]]) {
+		if (text) controlMembers.push([member, Buffer.from(text.replace(/\r\n?/g, '\n')), 0o755]);
+	}
+	const controlGz = zlib.gzipSync(tar(controlMembers), { level: 9 });
+	const dataFiles = files.map(([name, data, mode]) => ['./' + name, data, mode]);
+	const dataGz = zlib.gzipSync(tar([['./', Buffer.alloc(0), 0o755, '5'], ...dataFiles]), { level: 9 });
+	return Buffer.concat([ar([
+		['debian-binary', Buffer.from('2.0\n'), 0o100644],
+		['control.tar.gz', controlGz, 0o100644],
+		['data.tar.gz', dataGz, 0o100644],
+	])]);
+}
+
+// Lifecycle для opkg. opkg upgrade: prerm (старого пакета) -> удаление файлов ->
+// распаковка нового -> postinst (нового); postrm выполняется только при полном удалении.
+// Аналог apk .post-install (enable на новой установке) и .post-upgrade (сохранение
+// включённости): prerm запоминает наличие автозапуска в /var/run, postinst восстанавливает.
+const panelPostinst = `#!/bin/sh
+autostart=1
+if [ -f /var/run/csqtt-autostart-flag ]; then
+	state="$(cat /var/run/csqtt-autostart-flag 2>/dev/null)"
+	[ "\`printf '%s' "$state" | tr -d '[:space:]'\`" = "1" ] || autostart=0
+	rm -f /var/run/csqtt-autostart-flag
+fi
+if [ "$autostart" = 1 ]; then
+	/etc/init.d/csqtt enable >/dev/null 2>&1 || true
+fi
+rm -rf /tmp/luci-indexcache* 2>/dev/null || true
+/etc/init.d/rpcd restart >/dev/null 2>&1 || true
+exit 0
+`;
+const panelPrerm = `#!/bin/sh
+enabled=0
+if [ -x /etc/init.d/csqtt ]; then
+	for link in /etc/rc.d/*csqtt*; do
+		if [ -e "$link" ]; then
+			enabled=1
+			break
+		fi
+	done
+fi
+printf '%d\\n' "$enabled" > /var/run/csqtt-autostart-flag
+/etc/init.d/csqtt stop >/dev/null 2>&1 || true
+exit 0
+`;
+const panelPostrm = `#!/bin/sh
+rm -f /var/run/csqtt-autostart-flag
+exit 0
+`;
 
 function walkFiles(directory, prefix, files, skip = new Set()) {
 	for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -174,6 +270,52 @@ const panelApk = buildApk({
 });
 fs.writeFileSync(path.join(outputDirectory, 'luci-app-csqtt-2.0-openwrt-25.12.apk'), panelApk);
 results.push({ output: 'luci-app-csqtt-2.0-openwrt-25.12.apk', bytes: panelApk.length, sha256: crypto.createHash('sha256').update(panelApk).digest('hex') });
+
+// --- OpenWrt 24.10: opkg/IPK ---
+for (const spec of [
+	{
+		pkgname: 'csqtt-core-2.1.9', pkgver: '2.1.9-r1',
+		pkgdesc: 'CSQTT core 2.1.9 (static musl, MIPS32r2 soft-float) for MediaTek MT7621',
+		data: core219,
+		file: 'usr/libexec/csqtt/csqtt-core-2.1.9',
+		out: 'csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk',
+		arch: 'mipsel_24kc',
+	},
+	{
+		pkgname: 'csqtt-core-2.5.0', pkgver: '2.5.1-r1',
+		pkgdesc: 'CSQTT core 2.5.1 (static musl, MIPS32r2 soft-float) for MediaTek MT7621',
+		data: core251,
+		file: 'usr/libexec/csqtt/csqtt-core-2.5.0',
+		out: 'csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk',
+		arch: 'mipsel_24kc',
+	},
+]) {
+	const ipk = buildIpk({
+		pkgname: spec.pkgname,
+		pkgver: spec.pkgver,
+		pkgdesc: spec.pkgdesc,
+		arch: spec.arch,
+		depends: ['kmod-tun'],
+		files: [[spec.file, spec.data, 0o755], ...licenseFiles(spec.pkgname)],
+	});
+	fs.writeFileSync(path.join(outputDirectory, spec.out), ipk);
+	results.push({ output: spec.out, bytes: ipk.length, sha256: crypto.createHash('sha256').update(ipk).digest('hex') });
+}
+
+const panelIpk = buildIpk({
+	pkgname: 'luci-app-csqtt',
+	pkgver: '2.0-r10',
+	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
+	arch: 'all',
+	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
+	files: panelFiles,
+	postinst: panelPostinst,
+	prerm: panelPrerm,
+	postrm: panelPostrm,
+	conffiles: ['etc/config/csqtt'],
+});
+fs.writeFileSync(path.join(outputDirectory, 'luci-app-csqtt-2.0-openwrt-24.10.ipk'), panelIpk);
+results.push({ output: 'luci-app-csqtt-2.0-openwrt-24.10.ipk', bytes: panelIpk.length, sha256: crypto.createHash('sha256').update(panelIpk).digest('hex') });
 
 const sums = results.map((r) => `${r.sha256}  ${r.output}`).join('\n') + '\n';
 fs.writeFileSync(path.join(outputDirectory, 'SHA256SUMS'), sums);
