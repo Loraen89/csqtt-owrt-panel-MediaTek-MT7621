@@ -85,7 +85,7 @@ start_service() {
 	local obfs turn_transport srtp_mode fingerprint captcha_mode vk_hash_mode vk_auth_mode
 	local client_ids turn turn_port custom_turn_ips exact_workers startup_wait
 	local domain_routing exclude_ru_zones template_domains domain_whitelist direct_domains
-	local ip_routing ip_whitelist direct_ips vk_js_token
+	local ip_routing ip_whitelist direct_ips vk_js_token device_id
 
 	config_get_bool enabled main enabled 0
 	[ "$enabled" = "1" ] || {
@@ -141,6 +141,9 @@ start_service() {
 	config_get_bool ip_whitelist main ip_whitelist 0
 	config_get direct_ips main direct_ips
 	config_get startup_wait main startup_wait 180
+	# Per-profile device ID wins; fall back to the shared one from main.
+	config_get device_id "$SELECTED_PROFILE" device_id
+	[ -n "$device_id" ] || config_get device_id main device_id
 
 	[ -n "$peer" ] || { echo "csqtt: peer is required" >&2; return 1; }
 	[ -n "$password" ] || { echo "csqtt: password is required" >&2; return 1; }
@@ -159,6 +162,17 @@ start_service() {
 	[ "$tun_mtu" -ge 576 ] && [ "$tun_mtu" -le 9000 ] || { echo "csqtt: tun_mtu must be between 576 and 9000" >&2; return 1; }
 	case "$ifname" in ''|*[!A-Za-z0-9_.-]*) echo "csqtt: invalid TUN interface name" >&2; return 1;; esac
 	[ "${#ifname}" -le 15 ] || { echo "csqtt: TUN interface name is too long" >&2; return 1; }
+
+	# The device ID is sent to the server in the GETCONF registration line
+	# (GETCONF:<port>|<device_id>|<password>|...). '|' and ':' are protocol
+	# separators, so keep the identifier to a safe charset.
+	if [ -n "$device_id" ]; then
+		case "$device_id" in *[!A-Za-z0-9._-]*)
+			echo "csqtt: device_id may contain only letters, digits, dot, underscore and dash" >&2
+			return 1 ;;
+		esac
+		[ "${#device_id}" -le 64 ] || { echo "csqtt: device_id is too long (max 64 characters)" >&2; return 1; }
+	fi
 
 	[ -e /dev/net/tun ] || modprobe tun 2>/dev/null
 	[ -e /dev/net/tun ] || { echo "csqtt: /dev/net/tun is unavailable" >&2; return 1; }
@@ -190,6 +204,10 @@ start_service() {
 	if [ "$CSQTT_BIN" = "/usr/libexec/csqtt/csqtt-core-2.1.9" ]; then
 		# The legacy core has no CSQTT_PASSWORD environment fallback.
 		procd_append_param command --password "$password"
+		# 2.1.9 takes the device ID from the command line (default "unknown").
+		# Newer cores (2.5.x) removed this argument entirely; passing it there
+		# would abort the client, so only hand it to the legacy core.
+		append_value --device-id "$device_id"
 	else
 		procd_append_param command \
 			--runtime-threads "$runtime_threads" \

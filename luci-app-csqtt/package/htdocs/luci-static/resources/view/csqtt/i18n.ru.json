@@ -123,6 +123,12 @@
  "Delete profile \"%s\"? The UCI section will be removed.": "Удалить профиль «%s»? Секция UCI будет удалена.",
  "Details": "Подробности",
  "Device ID": "Идентификатор устройства",
+
+ "Device ID: ": "ID устройства: ",
+ "The first profile gets a random Device ID; further profiles reuse it so running connections are not affected.": "Первый профиль получает случайный идентификатор устройства; последующие профили используют его же, чтобы не ронять работающие соединения.",
+ "randomly generated": "создаётся случайно",
+ "Random ID generated for the first profile and then reused by further profiles. Applies to core 2.1.9; empty keeps the stored value.": "Случайный идентификатор создаётся для первого профиля, далее переиспользуется остальными. Действует для ядра 2.1.9; пустое поле сохраняет текущее значение.",
+ "device ID may contain only letters, digits, dot, underscore and dash (max 64)": "идентификатор устройства может содержать только буквы, цифры, точку, подчёркивание и дефис (максимум 64)",
  "Device ID is bound to the existing access/password. Do not change or regenerate without unbinding it on the server.": "Идентификатор устройства привязан к данным доступа на сервере. Не меняйте и не создавайте его заново без предварительной отвязки на сервере.",
  "Diagnostics": "Диагностика",
  "Diagnostics complete": "Диагностика завершена",

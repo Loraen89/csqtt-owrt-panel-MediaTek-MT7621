@@ -16,7 +16,7 @@ const IFNAME_RE = regexp("^[A-Za-z0-9_.-]{1,15}$");
 const PROFILE_RE = regexp("^[A-Za-z0-9_]+$");
 const TRAIL_NL = regexp("[\r\n]+$");
 const PROFILE_SAFE = ["name", "enabled", "priority", "peer", "core_version", "workers",
-	"obfs", "turn_transport", "captcha_mode", "fingerprint", "note"];
+	"obfs", "turn_transport", "captcha_mode", "fingerprint", "note", "device_id"];
 
 function shellquote(value) {
 	return "'" + replace("" + value, "'", "'\\''") + "'";

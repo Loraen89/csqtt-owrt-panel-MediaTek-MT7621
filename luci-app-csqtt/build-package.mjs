@@ -260,7 +260,7 @@ exit 0
 `);
 const panelApk = buildApk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r10',
+	pkgver: '2.0-r12',
 	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
 	arch: 'noarch',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
@@ -304,7 +304,7 @@ for (const spec of [
 
 const panelIpk = buildIpk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r10',
+	pkgver: '2.0-r12',
 	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
 	arch: 'all',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
