@@ -16,6 +16,7 @@ jobs:
           find luci-app-csqtt/package/htdocs -name '*.js' -exec node --check '{}' ';'
           node tools/test-export.mjs
           node tools/test-logs.mjs
+          node tools/test-shell-ui.mjs
           (cd dist && sha256sum -c SHA256SUMS)
       - name: Exercise shell integration
         run: |

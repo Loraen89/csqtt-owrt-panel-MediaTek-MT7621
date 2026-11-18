@@ -16,6 +16,7 @@ case "$DELAY" in ''|*[!0-9]*) exit 2;; esac
 case "$LIMIT" in ''|*[!0-9]*) exit 2;; esac
 [ "$DELAY" -ge 60 ] && [ "$DELAY" -le 86400 ] || exit 2
 [ "$LIMIT" -ge 1 ] && [ "$LIMIT" -le 10 ] || exit 2
+DELAY=$(awk -v n="$DELAY" 'BEGIN { printf "%d", n }')
 [ "$#" -gt 0 ] || exit 2
 mkdir -p "$RUN_DIR" || exit 1
 child=''

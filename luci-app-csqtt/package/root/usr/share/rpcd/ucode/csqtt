@@ -212,8 +212,6 @@ function resolveProfileBin(cfg, active) {
 		return BIN_219;
 	if (pref == "2.5.3")
 		return BIN_253;
-	if (pref == "2.5.3")
-		return BIN_253;
 	if (pref == "2.5.0" || pref == "2.5.1")
 		return BIN_250;
 	if (fileExists(BIN_253) && fileExists(CONTROL_253))

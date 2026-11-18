@@ -34,6 +34,7 @@ start_core253
 grep -q 'run-core253.sh .*csqtt-control run --config' "$CALLS"
 grep -q 'csqtt.fixture.core_version=2.5.3' "$CALLS"
 grep -q 'csqtt.main.workers=10' "$CALLS"
+grep -q -- '-t .*core253/.uci -q set' "$CALLS"
 grep -q 'csqtt.main.install_routes=0' "$CALLS"
 grep -q 'CSQTT_FLOOD_RETRY_DELAY=3600' "$CALLS"
 ! grep -q -- '--password\|--peer\|--device-id' "$CALLS"
