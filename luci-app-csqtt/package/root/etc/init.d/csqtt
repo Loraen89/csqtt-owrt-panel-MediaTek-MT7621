@@ -3,6 +3,8 @@
 START=95
 STOP=10
 USE_PROCD=1
+EXTRA_COMMANDS="clear_flood"
+EXTRA_HELP="  clear_flood  Clear VK Flood control and leave the service stopped"
 
 CSQTT_BIN=""
 SELECTED_PROFILE=""
@@ -18,12 +20,16 @@ resolve_core() {
 	[ -n "$SELECTED_PROFILE" ] && config_get pref "$SELECTED_PROFILE" core_version
 	[ -n "$pref" ] || config_get pref main core_version auto
 	case "$pref" in
+		2.5.3)
+			CSQTT_BIN="/usr/bin/csqtt-2.5.3" ;;
 		2.1.9)
 			CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.1.9" ;;
 		2.5.0|2.5.1)
 			CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.5.0" ;;
 		*)
-			if [ -x /usr/libexec/csqtt/csqtt-core-2.5.0 ]; then
+			if [ -x /usr/bin/csqtt-2.5.3 ] && [ -x /usr/lib/csqtt/core-2.5.3/bin/csqtt-control ]; then
+				CSQTT_BIN="/usr/bin/csqtt-2.5.3"
+			elif [ -x /usr/libexec/csqtt/csqtt-core-2.5.0 ]; then
 				CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.5.0"
 			elif [ -x /usr/libexec/csqtt/csqtt-core-2.1.9 ]; then
 				CSQTT_BIN="/usr/libexec/csqtt/csqtt-core-2.1.9"
@@ -31,6 +37,58 @@ resolve_core() {
 				CSQTT_BIN="/usr/bin/csqtt-core"
 			fi ;;
 	esac
+}
+
+# 2.5.3 has a supervisor CLI, not the legacy transport CLI. Stage a private
+# configuration so its worker rules and interface-only defaults cannot alter
+# profiles belonging to the old cores. Reload rebuilds this snapshot.
+start_core253() {
+	local controller=/usr/lib/csqtt/core-2.5.3/bin/csqtt-control
+	local config_dir=/var/run/csqtt/core253 workers auto delay limit
+	[ -x "$controller" ] || { echo 'csqtt: 2.5.3 controller is missing' >&2; return 1; }
+	config_get workers "$SELECTED_PROFILE" workers 10
+	case "$workers" in ''|*[!0-9]*) return 1;; esac
+	[ "$workers" -ge 10 ] && [ "$workers" -le 100 ] && [ $((workers % 10)) -eq 0 ] || {
+		echo 'csqtt: core 2.5.3 needs 10..100 workers in multiples of 10' >&2; return 1;
+	}
+	config_get_bool auto main flood_auto_clear 1
+	config_get delay main flood_retry_delay 3600
+	config_get limit main flood_retry_limit 3
+	case "$delay:$limit" in *[!0-9:]*|:*|*:) return 1;; esac
+	[ "$delay" -ge 60 ] && [ "$delay" -le 86400 ] && [ "$limit" -ge 1 ] && [ "$limit" -le 10 ] || return 1
+	mkdir -p "$config_dir" || return 1
+	chmod 700 "$config_dir"
+	(umask 077; cp /etc/config/csqtt "$config_dir/csqtt") || return 1
+	chmod 600 "$config_dir/csqtt"
+	uci -c "$config_dir" -q set "csqtt.main.active_profile=$SELECTED_PROFILE" &&
+	uci -c "$config_dir" -q set "csqtt.$SELECTED_PROFILE.core_version=2.5.3" &&
+	uci -c "$config_dir" -q set csqtt.main.selection_mode=manual &&
+	uci -c "$config_dir" -q set csqtt.main.failover=0 &&
+	uci -c "$config_dir" -q set csqtt.main.failback=0 &&
+	uci -c "$config_dir" -q set "csqtt.main.workers=$workers" &&
+	uci -c "$config_dir" -q set csqtt.main.install_routes=0 &&
+	uci -c "$config_dir" -q set csqtt.main.apply_dns=0 &&
+	uci -c "$config_dir" -q set csqtt.routing.mode=auto &&
+	uci -c "$config_dir" -q commit csqtt || return 1
+	"$controller" doctor --pre-launch --config "$config_dir/csqtt" --status-path /var/run/csqtt/status.json
+	[ "$?" -lt 2 ] || return 1
+	procd_open_instance main
+	procd_set_param command /usr/libexec/csqtt/run-core253.sh "$controller" run \
+		--config "$config_dir/csqtt" --status /var/run/csqtt/status.json \
+		--log /var/log/csqtt.log --helper-port 8443
+	procd_set_param env "CSQTT_FLOOD_AUTO_CLEAR=$auto" "CSQTT_FLOOD_RETRY_DELAY=$delay" "CSQTT_FLOOD_RETRY_LIMIT=$limit"
+	procd_set_param respawn 60 10 0
+	procd_set_param term_timeout 20
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/csqtt
+	procd_close_instance
+}
+
+clear_flood() {
+	# Stop the supervisor before deleting its marker: this action never connects.
+	stop || return 1
+	rm -f /var/run/csqtt/flood-blocked /var/run/csqtt/flood-attempts /var/run/csqtt/flood-retry.json
 }
 
 append_value() {
@@ -102,6 +160,10 @@ start_service() {
 		echo "csqtt: $CSQTT_BIN is missing or not executable" >&2
 		return 1
 	}
+	if [ "$CSQTT_BIN" = /usr/bin/csqtt-2.5.3 ]; then
+		start_core253
+		return $?
+	fi
 
 	config_get peer "$SELECTED_PROFILE" peer
 	[ -n "$peer" ] || config_get peer main peer

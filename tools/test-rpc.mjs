@@ -16,16 +16,20 @@ for(let i=0;i<starts.length;i++){
 const fixtures=`
 let config={main:{enabled:'1',ifname:'csqtt0',selection_mode:'manual',active_profile:'profile1',core_version:'2.1.9',vk:'hash-secret'},
  profile1:{'.type':'server',enabled:'1',peer:'private.example:46000',password:'password-secret',name:'private.example',priority:'10',core_version:'2.1.9'}};
-let process={running:true,pid:'42'}, files={}, calls=[];
+let process={running:true,pid:'42'}, files={}, calls=[], modernInstalled=false, controllerCode=0;
 files[STATUS_PATH]=sprintf('%J',{started_at:1,uptime_secs:5,connectivity:{session_established:true},workers:{active:3}});
 function readText(path) { return files[path]; }
 function writeJson(path,value) { files[path]=sprintf('%J',value); return true; }
 function uciConfig() { return config; }
 function processInfo() { return process; }
 function binaryVersion() { return 'fixture-core'; }
-function fileExists(path) { return path=='/dev/net/tun'||path=='/sys/class/net/csqtt0'||path==BIN_219||path==BIN_250; }
+function fileExists(path) { return files[path]!=null||path=='/dev/net/tun'||path=='/sys/class/net/csqtt0'||path==BIN_219||path==BIN_250||(modernInstalled&&(path==BIN_253||path==CONTROL_253)); }
 function run(args) {
  push(calls,args);
+ if(args[0]==CONTROL_253&&args[1]=='status')return {code:controllerCode,out:sprintf('%J',{daemon_pid:99,connectivity:{session_established:true},workers:{active:10}})};
+ if(args[0]==CONTROL_253&&args[1]=='profile')return {code:0,out:'warning: contains a password\\ncsqtt://nativeEncrypted253'};
+ if(args[0]==BIN_250&&args[1]=='--decode-link')return {code:127,out:''};
+ if(args[0]==CONTROL_253&&args[1]=='link-decrypt')return {code:0,out:'warning\\ncsqtt://connect?v=2&host=test.invalid&password=test&core=2.5.3'};
  if(args[0]=='/sbin/ip') return {code:0,out:'inet 10.66.67.9 peer 10.66.67.1/32'};
  if(args[0]==LOGREAD) return {code:0,out:'run-core.sh: connected\\n'};
  return {code:0,out:''};
@@ -66,6 +70,17 @@ metrics(310,1200,7);check(processResources(process).process_cpu_percent==200,'mu
 check(processResources(process).process_cpu_percent==200,'same-tick reads keep last CPU sample');
 metrics(1,1600,8);check(processResources(process).process_cpu_percent==null,'PID reuse resets baseline');
 let stopped=processResources({running:false,pid:''});check(stopped.process_cpu_percent==null&&stopped.process_rss_kb==null,'stopped process has no stale resources');
+config.profile1.password='test';config.profile1.core_version='2.5.3';modernInstalled=true;
+let modern=statusObject();check(modern.running&&modern.connected&&modern.pid=='99','2.5.3 status uses the controller contract');
+files['/var/run/csqtt/flood-blocked']='blocked';
+files['/var/run/csqtt/flood-retry.json']=sprintf('%J',{blocked:true,auto_clear:true,attempts:0,limit:3,retry_in:60});
+modern=statusObject();check(!modern.connected&&modern.status.flood_retry.retry_in==60,'Flood overrides stale connected evidence and exposes the retry countdown');
+files['/var/run/csqtt/flood-blocked']=null;controllerCode=127;
+check(!statusObject().running,'missing 2.5.3 controller is never reported as running');
+controllerCode=0;
+let modernExport=mProfileExport({args:{id:'profile1'}});check(modernExport.ok&&modernExport.core_version=='2.5.3'&&modernExport.link=='csqtt://nativeEncrypted253','2.5.3 export strips warnings and preserves native encryption');
+let modernImport=mProfileImport({args:{link:'csqtt://opaqueEncryptedLink'}});check(modernImport.ok&&modernImport.core_version=='2.5.3','2.5.3 controller decrypts links and the explicit protocol marker wins');
+check(mProfileImport({args:{link:'csqtt://connect?v=2&host=test.invalid&password=test&core=2.5.3'}}).core_version=='2.5.3','plain links also retain an explicit core marker');
 printf('PASS: RPC credentials, address, export protocol, import, diagnostic privacy, logs, profile selection, CPU/RSS\\n');
 `;
 fs.writeFileSync(output,constants+fixtures+body+tests);

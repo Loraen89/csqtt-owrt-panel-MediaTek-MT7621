@@ -44,7 +44,7 @@ return view.extend({
 			E('style', {}, CSS),
 			E('div', { class: 'csqtt-brand' }, [
 				E('span', { class: 'csqtt-brand-name' }, 'CSQTT-PANEL v2.0'),
-				E('span', { class: 'csqtt-brand-tag' }, 'полный интерфейс LuCI, ядра 2.1.9 / 2.5.1')
+				E('span', { class: 'csqtt-brand-tag' }, 'полный интерфейс LuCI, ядра 2.1.9 / 2.5.1 / 2.5.3')
 			]),
 			E('div', { class: 'csqtt-section' }, [
 				E('h3', {}, _('Versions')),

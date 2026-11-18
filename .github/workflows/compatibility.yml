@@ -1,0 +1,42 @@
+name: Panel and core compatibility
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate JavaScript and packages
+        run: |
+          set -eu
+          find luci-app-csqtt/package/htdocs -name '*.js' -exec node --check '{}' ';'
+          node tools/test-export.mjs
+          node tools/test-logs.mjs
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Exercise shell integration
+        run: |
+          set -eu
+          sh -n install.sh
+          sh -n vendor/upstream/install-csqtt.sh
+          sh tools/test-bootstrap.sh
+          sh tools/test-core253.sh
+          sh tools/test-flood.sh
+          sh tools/test-shell.sh
+      - name: Build pinned ucode and run RPC regressions
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake build-essential pkg-config libjson-c-dev
+          git init /tmp/ucode-source
+          git -C /tmp/ucode-source remote add origin https://github.com/ucode-lang/ucode.git
+          git -C /tmp/ucode-source fetch --depth=1 origin a2c42eac6369a0bba0315007c7dc7b7130275340
+          git -C /tmp/ucode-source checkout --detach FETCH_HEAD
+          cmake -S /tmp/ucode-source -B /tmp/ucode-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/ucode-build --parallel 2
+          /tmp/ucode-build/ucode -L '/tmp/ucode-build/*.so' -c -o /tmp/csqtt-rpc.ucb luci-app-csqtt/package/root/usr/share/rpcd/ucode/csqtt
+          node tools/test-rpc.mjs /tmp/test-rpc.uc
+          /tmp/ucode-build/ucode /tmp/test-rpc.uc

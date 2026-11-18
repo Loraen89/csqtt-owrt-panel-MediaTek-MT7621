@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/starkugz/csqtt-openwrt",
+  "commit": "724f5855515a4501135590f479ee5b9fd66f3307",
+  "release": "v2.5.3",
+  "path": "router/install-csqtt.sh",
+  "sha256": "bf034e9196b329b0b23dded920afca2acdbbf35e546c229a422d5590e80e3f30",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "modified": false
+}

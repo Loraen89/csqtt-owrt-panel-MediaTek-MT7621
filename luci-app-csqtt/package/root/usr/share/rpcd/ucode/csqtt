@@ -5,6 +5,8 @@ import * as fs from "fs";
 const BIN = "/usr/bin/csqtt-core";
 const BIN_250 = "/usr/libexec/csqtt/csqtt-core-2.5.0";
 const BIN_219 = "/usr/libexec/csqtt/csqtt-core-2.1.9";
+const BIN_253 = "/usr/bin/csqtt-2.5.3";
+const CONTROL_253 = "/usr/lib/csqtt/core-2.5.3/bin/csqtt-control";
 const INIT = "/etc/init.d/csqtt";
 const UCI = "/sbin/uci";
 const LOGREAD = "/sbin/logread";
@@ -208,8 +210,14 @@ function resolveProfileBin(cfg, active) {
 		: mainValue(cfg, "core_version", "auto");
 	if (pref == "2.1.9")
 		return BIN_219;
+	if (pref == "2.5.3")
+		return BIN_253;
+	if (pref == "2.5.3")
+		return BIN_253;
 	if (pref == "2.5.0" || pref == "2.5.1")
 		return BIN_250;
+	if (fileExists(BIN_253) && fileExists(CONTROL_253))
+		return BIN_253;
 	if (fileExists(BIN_250))
 		return BIN_250;
 	if (fileExists(BIN_219))
@@ -223,7 +231,7 @@ function resolveBin() {
 }
 
 function binaryVersion() {
-	let result = run([resolveBin(), "--version"]);
+	let result = resolveBin() == BIN_253 ? run([CONTROL_253, "version"]) : run([resolveBin(), "--version"]);
 	return result.code == 0 ? clean(result.out) : "unavailable";
 }
 
@@ -291,11 +299,19 @@ function statusObject() {
 	let ifname = mainValue(cfg, "ifname", "csqtt0");
 	let active = chooseProfile(cfg);
 	let raw = parseJson(readText(STATUS_PATH));
+	let modern = resolveProfileBin(cfg, active) == BIN_253;
+	if (modern) {
+		let result = run([CONTROL_253, "status", "--json", "--status-path", STATUS_PATH]);
+		raw = (result.code == 0 || result.code == 1) ? parseJson(result.out) : null;
+		proc = { running: raw != null && (result.code == 0 || result.code == 1),
+			pid: raw != null && raw.daemon_pid != null ? "" + raw.daemon_pid : "" };
+	}
 	let status = raw != null ? raw : {};
 	let interfaceUp = match(ifname, IFNAME_RE) != null && fileExists("/sys/class/net/" + ifname);
 	let rx = interfaceUp ? readNumber("/sys/class/net/" + ifname + "/statistics/rx_bytes") : 0;
 	let tx = interfaceUp ? readNumber("/sys/class/net/" + ifname + "/statistics/tx_bytes") : 0;
 	let workers = profileValue(cfg, active, "workers", mainValue(cfg, "workers", "9"));
+	if (modern) workers = profileValue(cfg, active, "workers", "10");
 	let address = "";
 	if (interfaceUp) {
 		let result = run(["/sbin/ip", "-4", "addr", "show", "dev", ifname]);
@@ -358,6 +374,16 @@ function statusObject() {
 	status.tx_bytes = tx;
 	status.reconnects = raw != null && raw.reconnects != null ? raw.reconnects : 0;
 	status.resources = processResources(proc);
+	if (modern) {
+		let retry = parseJson(readText("/var/run/csqtt/flood-retry.json"));
+		let blocked = fileExists("/var/run/csqtt/flood-blocked");
+		status.flood_retry = blocked && retry != null ? retry : { blocked: blocked, auto_clear: false };
+		if (blocked) {
+			connected = false;
+			status.connectivity.stage = "flood_blocked";
+			status.connectivity.session_established = false;
+		}
+	}
 	return {
 		instance: "main",
 		code: connected ? 0 : (proc.running ? 1 : 2),
@@ -381,8 +407,8 @@ function mStatus(req) {
 
 function mService(req) {
 	let action = req.args.action;
-	if (action != "start" && action != "stop" && action != "restart" && action != "reload")
-		return { ok: false, code: -1, error: "action: start|stop|restart|reload" };
+	if (action != "start" && action != "stop" && action != "restart" && action != "reload" && action != "clear_flood")
+		return { ok: false, code: -1, error: "action: start|stop|restart|reload|clear_flood" };
 	let result = run([INIT, action]);
 	let status = statusObject();
 	let ok = result.code == 0;
@@ -564,6 +590,17 @@ function mProfileExport(req) {
 		return { ok: false, error: "invalid profile id" };
 	let section = cfg[id];
 	if (!configuredProfile(section)) return { ok: false, error: "profile has no peer or password" };
+	if (resolveProfileBin(cfg, id) == BIN_253) {
+		let result = run([CONTROL_253, "profile", "export", id, "--config", "/etc/config/csqtt"]);
+		if (result.code != 0) return { ok: false, error: "2.5.3 profile export failed" };
+		let lines = split(result.out, "\n");
+		for (let i = 0; i < length(lines); i++) {
+			let link = clean(lines[i]);
+			if (substr(link, 0, 8) == "csqtt://")
+				return { ok: true, core_version: "2.5.3", link: link, payload: null };
+		}
+		return { ok: false, error: "2.5.3 export did not return a link" };
+	}
 	let link = "csqtt://connect?v=2&host=" + percentEncode(section.peer) +
 		"&password=" + percentEncode(section.password) +
 		"&workers=" + percentEncode(profileValue(cfg, id, "workers", "9")) +
@@ -575,6 +612,11 @@ function mProfileExport(req) {
 	return { ok: true, instance: "main", core_version: core,
 		link: core == "2.1.9" ? link : null,
 		payload: core == "2.1.9" ? null : link };
+}
+
+function linkCore(payload, fallback) {
+	let core = match(payload, regexp("[?&]core=(2[.]5[.]3|2[.]5[.]0|2[.]1[.]9)(&|$)"));
+	return core != null ? core[1] : fallback;
 }
 
 function mProfileImport(req) {
@@ -591,21 +633,27 @@ function mProfileImport(req) {
 			index(lc(payload), "password=") < 0)
 			return { ok: false, error: "plain link has an unsupported payload" };
 		return { ok: true, instance: "main", payload: payload,
-			core_version: "2.1.9", link_type: "plain" };
+			core_version: linkCore(payload, "2.1.9"), link_type: "plain" };
 	}
 	// Encrypted links belong to the 2.5.x protocol. Never decode them with the
 	// currently selected binary: a previous 2.1.9 selection must not make a
 	// valid encrypted link fail or silently pick the wrong core.
 	let decoded = run([BIN_250, "--decode-link", link]);
+	if (decoded.code != 0 && fileExists(CONTROL_253))
+		decoded = run([CONTROL_253, "link-decrypt", link]);
 	if (decoded.code != 0)
 		return { ok: false, error: "link authentication or decryption failed" };
 	let payload = clean(decoded.out);
+	// The controller may prepend a warning; only the link line is payload.
+	let lines = split(payload, "\n");
+	for (let i = 0; i < length(lines); i++)
+		if (substr(clean(lines[i]), 0, 8) == "csqtt://") payload = substr(clean(lines[i]), 8);
 	if (payload == "" || length(payload) > 8192 ||
 		(index(lc(payload), "host=") < 0 && index(lc(payload), "connect?") < 0) ||
 		index(lc(payload), "password=") < 0)
 		return { ok: false, error: "decoded link has an unsupported payload" };
 	return { ok: true, instance: "main", payload: payload,
-		core_version: "2.5.0", link_type: "encrypted" };
+		core_version: linkCore(payload, "2.5.0"), link_type: "encrypted" };
 }
 
 function mLinkDecrypt(req) {
@@ -724,6 +772,10 @@ function mCaptchaHelperInfo(req) {
 }
 
 function mSelfTest(req) {
+	if (resolveBin() == BIN_253) {
+		let result = run([CONTROL_253, "doctor", "--pre-launch", "--config", "/etc/config/csqtt", "--status-path", STATUS_PATH]);
+		return { ok: result.code < 2, code: result.code, output: clean(result.out) };
+	}
 	let result = run([resolveBin(), "--self-test"]);
 	return { ok: result.code == 0, code: result.code, output: clean(result.out) };
 }
