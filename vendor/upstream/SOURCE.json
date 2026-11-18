@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/starkugz/csqtt-openwrt",
+  "commit": "724f5855515a4501135590f479ee5b9fd66f3307",
+  "release": "v2.5.3",
+  "path": "router/install-csqtt.sh",
+  "sha256": "bf034e9196b329b0b23dded920afca2acdbbf35e546c229a422d5590e80e3f30",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "modified": false,
+  "panel_shell": {
+    "release": "v2.5.3",
+    "asset": "luci-app-csqtt-2.5-openwrt-24.10.8-all.ipk",
+    "sha256": "1e9d5ad0985a8d642020d913d2c76e7e27c40e7f0285640ddd809781a896630c",
+    "files": [
+      "www/luci-static/resources/view/csqtt/theme.js",
+      "www/luci-static/resources/view/csqtt/status.js"
+    ],
+    "adapted": true
+  }
+}

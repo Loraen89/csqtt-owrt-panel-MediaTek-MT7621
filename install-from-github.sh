@@ -30,6 +30,7 @@ usage() {
   --core 2.5.0    установить панель + ядро 2.5.0 (бинарник 2.5.1)
   --core both     установить панель + оба ядра
   --ref REF       качать dist/ из ветки/тега (по умолчанию — последний релиз)
+  --panel-only    Установить только панель; сохранить выбор ядра
   --dry-run       показать план без установки
   --help          показать эту справку
 
@@ -44,6 +45,7 @@ while [ "$#" -gt 0 ]; do
 		--core=*) CORE_CHOICE="${1#--core=}" ;;
 		--ref) shift; REF="${1:-}" ;;
 		--ref=*) REF="${1#--ref=}" ;;
+		--panel-only) CORE_CHOICE=panel ;;
 		--dry-run) DRY_RUN=1 ;;
 		--help|-h) usage; exit 0 ;;
 		*) echo "Неизвестный параметр: $1" >&2; usage >&2; exit 2 ;;
@@ -75,7 +77,7 @@ EOF
 
 choose_core
 case "$CORE_CHOICE" in
-	2.1.9|2.5.0|both) ;;
+	2.1.9|2.5.0|both|panel) ;;
 	2.5.1) CORE_CHOICE='2.5.0' ;;
 	*) echo "Недопустимое ядро: $CORE_CHOICE" >&2; exit 2 ;;
 esac
@@ -180,7 +182,7 @@ WANTED="$PANEL_NAME $SUMS_NAME"
 if [ "$CORE_CHOICE" = '2.1.9' ] || [ "$CORE_CHOICE" = 'both' ]; then
 	WANTED="$WANTED $CORE219_NAME"
 fi
-if [ "$CORE_CHOICE" != '2.1.9' ]; then
+if [ "$CORE_CHOICE" = '2.5.0' ] || [ "$CORE_CHOICE" = 'both' ]; then
 	WANTED="$WANTED $CORE251_NAME"
 fi
 
@@ -222,7 +224,7 @@ PACKAGES="$WORKDIR/$PANEL_NAME"
 if [ "$CORE_CHOICE" = '2.1.9' ] || [ "$CORE_CHOICE" = 'both' ]; then
 	PACKAGES="$PACKAGES $WORKDIR/$CORE219_NAME"
 fi
-if [ "$CORE_CHOICE" != '2.1.9' ]; then
+if [ "$CORE_CHOICE" = '2.5.0' ] || [ "$CORE_CHOICE" = 'both' ]; then
 	PACKAGES="$PACKAGES $WORKDIR/$CORE251_NAME"
 fi
 
@@ -234,7 +236,7 @@ fi
 
 # shellcheck disable=SC2086
 if [ "$PKG_MGR" = 'apk' ]; then
-	apk add --allow-untrusted $PACKAGES
+	apk add --allow-untrusted --force-non-repository $PACKAGES
 else
 	opkg install $PACKAGES || {
 		echo 'opkg не смог установить пакеты. Проверьте доступ к фидам OpenWrt 24.10:' >&2
@@ -243,19 +245,20 @@ else
 	}
 fi
 
+SELECTED_CORE=''
 case "$CORE_CHOICE" in
 	2.1.9) SELECTED_CORE='2.1.9' ;;
 	2.5.0) SELECTED_CORE='2.5.0' ;;
 	both) SELECTED_CORE='auto' ;;
 esac
-if command -v uci >/dev/null 2>&1; then
+if [ -n "$SELECTED_CORE" ] && command -v uci >/dev/null 2>&1; then
 	uci -q set "csqtt.main.core_version=$SELECTED_CORE"
 	uci -q commit csqtt
 fi
 
 rm -rf /tmp/luci-indexcache* 2>/dev/null || true
 /etc/init.d/rpcd restart >/dev/null 2>&1 || true
-/etc/init.d/csqtt enable >/dev/null 2>&1 || true
+[ "$CORE_CHOICE" = panel ] || /etc/init.d/csqtt enable >/dev/null 2>&1 || true
 
 echo 'Установка завершена.'
 echo 'Панель: LuCI -> Службы -> CSQTT-PANEL v2.0.'

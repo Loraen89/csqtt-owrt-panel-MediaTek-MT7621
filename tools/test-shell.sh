@@ -30,7 +30,12 @@ resolve_core
 
 mkdir -p "$sandbox/runtime" "$sandbox/bin" "$sandbox/install" "$sandbox/etc/config"
 for name in status.json access-check.json cpu-sample.json; do echo stale >"$sandbox/runtime/$name"; done
-sed "s@/var/run/csqtt@$sandbox/runtime@g" "$project/luci-app-csqtt/package/root/usr/libexec/csqtt/run-core.sh" >"$sandbox/wrapper.sh"
+cat >"$sandbox/bin/ip" <<'EOF'
+#!/bin/sh
+echo 'default via 192.0.2.1 dev wan'
+EOF
+chmod 755 "$sandbox/bin/ip"
+sed "s@/var/run/csqtt@$sandbox/runtime@g;s@/sbin/ip@$sandbox/bin/ip@g" "$project/luci-app-csqtt/package/root/usr/libexec/csqtt/run-core.sh" >"$sandbox/wrapper.sh"
 CSQTT_STARTUP_WAIT=0 sh "$sandbox/wrapper.sh" /bin/true
 for name in status.json access-check.json cpu-sample.json; do
  [ ! -e "$sandbox/runtime/$name" ] || fail 'wrapper must remove stale session evidence'
@@ -60,7 +65,7 @@ if sh "$sandbox/install/install.sh" --core 2.1.9 --dry-run >/dev/null 2>&1; then
 [ ! -e "$TEST_APK_LOG" ] || fail 'unverified packages must not reach apk'
 echo 'invalid  luci-app-csqtt-2.0-openwrt-25.12.apk' >"$sandbox/install/SHA256SUMS"
 if sh "$sandbox/install/install.sh" --core 2.1.9 --dry-run >/dev/null 2>&1; then fail 'checksum mismatch must fail'; fi
-(cd "$sandbox/install" && sha256sum ./*.apk | sed 's@  ./@  @' >SHA256SUMS)
+(cd "$sandbox/install" && sha256sum -t ./*.apk | sed 's@  ./@  @' >SHA256SUMS)
 sh "$sandbox/install/install.sh" --core 2.1.9 --dry-run >/dev/null
 [ ! -e "$TEST_APK_LOG" ] || fail 'dry run must not install packages'
 
@@ -80,7 +85,7 @@ cat >"$sandbox/bin-opkg/opkg" <<'EOF'
 echo "$*" >>"$TEST_OPKG_LOG"
 case "$1" in
 	status) [ "$2" = luci-app-csqtt ] && echo 'Status: install user installed' ;;
-	remove) return 0 ;;
+	remove) exit 0 ;;
 esac
 exit 0
 EOF
@@ -91,7 +96,7 @@ export PATH="$sandbox/bin-opkg:$ORIGINAL_PATH"
 sed "s@/etc/@$sandbox/etc-opkg/@g;s@/tmp/luci-indexcache@$sandbox/luci-indexcache@g" "$project/install-csqtt.sh" >"$sandbox/install-opkg/install.sh"
 echo panel >"$sandbox/install-opkg/luci-app-csqtt-2.0-openwrt-24.10.ipk"
 echo core >"$sandbox/install-opkg/csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk"
-(cd "$sandbox/install-opkg" && sha256sum ./*.ipk | sed 's@  ./@  @' >SHA256SUMS)
+(cd "$sandbox/install-opkg" && sha256sum -t ./*.ipk | sed 's@  ./@  @' >SHA256SUMS)
 sh "$sandbox/install-opkg/install.sh" --core 2.1.9 --dry-run >/dev/null
 [ ! -e "$TEST_OPKG_LOG" ] || fail 'dry run must not install packages via opkg'
 grep -q '^add' "$TEST_OPKG_LOG" && fail 'dry run must not install packages via opkg' || true

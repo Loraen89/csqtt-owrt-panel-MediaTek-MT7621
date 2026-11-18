@@ -38,4 +38,8 @@ context.crypto={getRandomValues:array=>webcrypto.getRandomValues(array)};
 await profiles.handleExport('fixture');
 assert.equal(modal,null,'HTTP must not offer an incompatible plaintext link for 2.5');
 assert.equal(notifications.length,1,'HTTP encrypted export must explain secure-context requirement');
+modal=null;notifications=[];
+exported={ok:true,core_version:'2.5.3',link:encrypted,payload:null};
+await profiles.handleExport('fixture');
+assert.equal(modal.children.find(value=>value.tag==='input').attrs.value,encrypted,'2.5.3 native encrypted export works over HTTP without re-encryption');
 console.log('PASS: 2.1.9 HTTP export, 2.5.1 encrypted round-trip, HTTP encryption error handling');
