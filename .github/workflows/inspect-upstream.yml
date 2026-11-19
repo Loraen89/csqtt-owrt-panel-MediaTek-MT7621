@@ -1,0 +1,46 @@
+name: Inspect upstream MT7621 binaries
+
+on:
+  push:
+    branches: ['update/starkugz-panel25-mt7621']
+    paths: ['.github/workflows/inspect-upstream.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install emulator from Ubuntu packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-user
+      - name: Inspect upstream controller and transport without network profiles
+        run: |
+          set -eu
+          base=upstream/starkugz-v2.5.3/core253/root
+          controller="$base/usr/lib/csqtt/core-2.5.3/bin/csqtt-control"
+          transport="$base/usr/bin/csqtt-2.5.3"
+          {
+            file "$controller" "$transport"
+            readelf -l "$controller"
+            readelf -A "$controller"
+            readelf -l "$transport"
+            readelf -A "$transport"
+            echo 'CONTROLLER_HELP'
+            if timeout 20 qemu-mipsel "$controller" --help; then :; else echo "HELP_EXIT=$?"; fi
+            echo 'CONTROLLER_BRANCHES'
+            strings "$controller" | grep -E 'engine.*2\.5|2\.5\.0.*engine|2\.1\.9.*engine|clear-flood|core-version' | cut -c1-1000 | head -30 || true
+          } > upstream/starkugz-v2.5.3/INSPECT.txt 2>&1
+          cat upstream/starkugz-v2.5.3/INSPECT.txt
+      - name: Save inspection in integration branch
+        run: |
+          set -eu
+          test "${GITHUB_REF_NAME}" = 'update/starkugz-panel25-mt7621'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add upstream/starkugz-v2.5.3/INSPECT.txt
+          git commit -m 'Inspect upstream MT7621 controller ABI and CLI in QEMU user mode'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
