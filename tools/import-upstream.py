@@ -12,7 +12,20 @@ import urllib.request
 
 def ar_members(data):
     if data[:8] != b"!<arch>\n":
-        raise ValueError("Expected IPK ar container")
+        # OpenWrt also emits legacy IPK with an outer gzip/tar container.
+        result = {}
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                name = member.name.removeprefix("./")
+                if not member.isfile() or "/" in name or name in result:
+                    raise ValueError("Invalid outer IPK tar member")
+                with archive.extractfile(member) as source:
+                    result[name] = source.read()
+        if result.get("debian-binary") != b"2.0\n":
+            raise ValueError("Unsupported IPK format")
+        return result
     offset = 8
     result = {}
     while offset < len(data):
