@@ -111,6 +111,12 @@ start_service() {
 	[ -n "$workers" ] || config_get workers main workers 9
 	config_get obfs "$SELECTED_PROFILE" obfs
 	[ -n "$obfs" ] || config_get obfs main obfs unified
+	# The shared default was introduced in 2.5.x; legacy cores only support
+	# audio/video. Keep switching to 2.1.9 usable with the default config.
+	if [ "$CSQTT_BIN" = "/usr/libexec/csqtt/csqtt-core-2.1.9" ] && [ "$obfs" = "unified" ]; then
+		obfs=audio
+		logger -t csqtt 'core 2.1.9: unified obfuscation is unavailable; using audio'
+	fi
 	config_get turn_transport "$SELECTED_PROFILE" turn_transport
 	[ -n "$turn_transport" ] || config_get turn_transport main turn_transport udp
 	config_get fingerprint "$SELECTED_PROFILE" fingerprint

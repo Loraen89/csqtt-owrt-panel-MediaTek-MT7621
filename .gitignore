@@ -32,6 +32,8 @@ cookies.txt
 
 # Logs
 *.log
+qemu-results/
+qemu-live/
 
 # OS/editor
 Thumbs.db
