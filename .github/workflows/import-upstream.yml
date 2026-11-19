@@ -1,0 +1,34 @@
+name: Stage upstream MT7621 panel and core
+
+on:
+  push:
+    branches: ['update/starkugz-panel25-mt7621']
+    paths:
+      - 'tools/import-upstream.py'
+      - 'tools/upstream-mt7621.json'
+      - '.github/workflows/import-upstream.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-mt7621-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download and verify immutable package checksums
+        run: python3 tools/import-upstream.py
+      - name: Commit staging files to the integration branch
+        run: |
+          set -eu
+          test "${GITHUB_REF_NAME}" = 'update/starkugz-panel25-mt7621'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add upstream/starkugz-v2.5.3
+          git commit -m 'Stage verified starkugz panel 2.5 and MT7621 core 2.5.3; integration pending'
+          git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -1,0 +1,19 @@
+{
+  "repository": "starkugz/csqtt-openwrt",
+  "tag": "v2.5.3",
+  "manifest_commit": "f6ee701974285fa6e984c404dcfa351d3e0556d5",
+  "assets": [
+    {
+      "component": "core253",
+      "name": "csqtt-core-2.5.3-openwrt-24.10.8-ramips-mt7621-mipsel_24kc.ipk",
+      "size": 10562888,
+      "sha256": "cd1d950d2d5fd151c519de9c98a3829ffe9b0cd31abb5e393fa854e33c786137"
+    },
+    {
+      "component": "panel25",
+      "name": "luci-app-csqtt-2.5-openwrt-24.10.8-all.ipk",
+      "size": 172762,
+      "sha256": "d81aeee1830dcc87b8ecae425cbb243a29fe8e2bf647140220e02b5661b2daba"
+    }
+  ]
+}
