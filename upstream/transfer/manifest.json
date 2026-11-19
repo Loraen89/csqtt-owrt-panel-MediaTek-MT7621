@@ -1,0 +1,146 @@
+{
+  "archive_size": 10580702,
+  "archive_sha256": "7c37fb91b44420918f776ce212ac75fa1ebc970d283df2ece162139dc18b6239",
+  "parts": [
+    {
+      "name": "core253-000.txt",
+      "sha256": "bf2c4efca7df3ba0da74dcc19cc23dd31d36cd32e349dcca1b76c0852211ed60",
+      "size": 512000
+    },
+    {
+      "name": "core253-001.txt",
+      "sha256": "145746c3aeed565b8db565d76ebfebca1e6fdc72282b90686c2346caf7cc54ff",
+      "size": 512000
+    },
+    {
+      "name": "core253-002.txt",
+      "sha256": "1528e368b9486d57eddba08ae3b9cc04af94fa5cb14348fb1d7bedeb78500637",
+      "size": 512000
+    },
+    {
+      "name": "core253-003.txt",
+      "sha256": "0c3dc0b6e9406750d31c7bc56add704300a032663a0a9f900336b0196da480a2",
+      "size": 512000
+    },
+    {
+      "name": "core253-004.txt",
+      "sha256": "2e6c7388b932da02c7de194a16743b5b106833554a086dfece5cd911539e5f59",
+      "size": 512000
+    },
+    {
+      "name": "core253-005.txt",
+      "sha256": "a41af0a4dc6c90843da54f55014e888d02db7a2dadf0dc1bdd77b92869708169",
+      "size": 512000
+    },
+    {
+      "name": "core253-006.txt",
+      "sha256": "4189992d4f385aaf736e25d671f8c13f6f1dcf9d10a71cde30a25bbd69fdad61",
+      "size": 512000
+    },
+    {
+      "name": "core253-007.txt",
+      "sha256": "02b438c42dc2216d1446e63d4fd26c98b0760da7ad2071fa05e37ad4ae947557",
+      "size": 512000
+    },
+    {
+      "name": "core253-008.txt",
+      "sha256": "10d23cc7af49dd773ad6d4463b305cf469784cdc572d1013fa82d8e7c1504c12",
+      "size": 512000
+    },
+    {
+      "name": "core253-009.txt",
+      "sha256": "b5a1dd1ba100456776ef1b3e886029a6d6aa4564f23fc008a27c91756d36dc40",
+      "size": 512000
+    },
+    {
+      "name": "core253-010.txt",
+      "sha256": "5ecf381bf62fd5281d42f912401665b7063477f8e6af6c8b1ba5d1e4c2a99df9",
+      "size": 512000
+    },
+    {
+      "name": "core253-011.txt",
+      "sha256": "9b8503258557a4cdf124526c49fda03f7573cab2f7c158e80af6455e420e8dfa",
+      "size": 512000
+    },
+    {
+      "name": "core253-012.txt",
+      "sha256": "75d7adc6b8b8972a7969285ca35f753e1e7db6b3cb34298937f27ac4bb460893",
+      "size": 512000
+    },
+    {
+      "name": "core253-013.txt",
+      "sha256": "acbeb5589e9f921f574a9cc9de2d8381566062d8950e719ebd308ec656f5f399",
+      "size": 512000
+    },
+    {
+      "name": "core253-014.txt",
+      "sha256": "c1485124e92713ea5c133a434e2a3bb9684988427f1d6c1d9d89488304ac066a",
+      "size": 512000
+    },
+    {
+      "name": "core253-015.txt",
+      "sha256": "0c0ec6e10409cb1918b8ebe9944c11bdb388d36aa2cece6e621ea3382564a183",
+      "size": 512000
+    },
+    {
+      "name": "core253-016.txt",
+      "sha256": "cc2ec3d8fd837bb85f26ce80e490e5832b7c583ccc2e17168758b0a715a33d26",
+      "size": 512000
+    },
+    {
+      "name": "core253-017.txt",
+      "sha256": "90bd46537d1b1b4ee231ac00d76f395b6432cd770e3e2e45bfec3be19a33f957",
+      "size": 512000
+    },
+    {
+      "name": "core253-018.txt",
+      "sha256": "52927b610fa0c87c1d27fd6e6985dfb1aa14c9f1b26044d8d4395d0048aaed4d",
+      "size": 512000
+    },
+    {
+      "name": "core253-019.txt",
+      "sha256": "21592945ed5e2862a51e81ea1279fcef0df14716f259bbda41595f1d06edcb5b",
+      "size": 512000
+    },
+    {
+      "name": "core253-020.txt",
+      "sha256": "85e9b105ac5c975745edc884868d1e427118bfe9a792d95d4f3172519d298411",
+      "size": 512000
+    },
+    {
+      "name": "core253-021.txt",
+      "sha256": "17c0022def461f6536358ded033b6da48515d14d1253fe85fd2a2d3b3b5e192b",
+      "size": 512000
+    },
+    {
+      "name": "core253-022.txt",
+      "sha256": "3e1ad841ad196b813ee3ae17499312bfffddb5bf3274f4771f901799ac193a8d",
+      "size": 512000
+    },
+    {
+      "name": "core253-023.txt",
+      "sha256": "057e74ed1e17c7aa5c37bd07b9d01fe56b9068908dd3d2540b0b5c852d92a005",
+      "size": 512000
+    },
+    {
+      "name": "core253-024.txt",
+      "sha256": "0fd4f965c03be29a9a65c963d577f60d8ff6dc0cef3513fe5c1c539e18745e4e",
+      "size": 512000
+    },
+    {
+      "name": "core253-025.txt",
+      "sha256": "e84fd9f597d3be819806d5a5c5ced88a1019161ab590a5e40f092884c9dcb556",
+      "size": 512000
+    },
+    {
+      "name": "core253-026.txt",
+      "sha256": "1f572e917abee5deb2ef09dc46d1cb88d3b4d3c9fdd17a2be879e36cb7b57d42",
+      "size": 512000
+    },
+    {
+      "name": "core253-027.txt",
+      "sha256": "9622e33fcd54003905a0a258808cd35abab61e488f6e50c04fc1f60721e7738a",
+      "size": 283604
+    }
+  ]
+}
