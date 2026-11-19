@@ -1,0 +1,24 @@
+Package: csqtt-core-2.5.3
+Version: 2.5.3-r5
+Depends: libc, kmod-tun, libgcc1
+Source: feeds/base/csqtt-core-2.5.3
+SourceName: csqtt-core-2.5.3
+License: PolyForm-Noncommercial-1.0.0
+Section: net
+SourceDateEpoch: 1784877710
+Maintainer: amurcanov
+Architecture: mipsel_24kc
+Installed-Size: 24145920
+Description:  CSQTT 2.5.3 client core with everything needed to run it on OpenWrt:
+ /usr/bin/csqtt-2.5.3 (musl transport; static on aarch64/x86/armv7, on
+ mipsel dynamically linked against the target musl libc and libgcc1) plus the
+ supervisor/CLI binary,
+ service script, UCI template and activation helper in
+ /usr/lib/csqtt/core-2.5.3/. Built with the documented OpenWrt patches:
+ secrets via environment only, reliable SIGTERM handling, TUN handoff events
+ over the supervisor socket, and terminal VK flood control keyed on the
+ structured error code 9 (the flood event also names the VK method and attempt
+ number, without URLs, parameters or tokens). Installing this single file is
+ enough for a router; the LuCI panel is optional and packaged separately.
+ License and required notices are installed under
+ /usr/share/licenses/csqtt-core-2.5.3/ (PolyForm Noncommercial 1.0.0).

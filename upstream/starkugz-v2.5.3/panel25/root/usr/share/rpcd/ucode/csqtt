@@ -1,0 +1,3146 @@
+// SPDX-FileCopyrightText: 2026 amurcanov
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// [M6a] rpcd-ucode бекенд CSQTT: ubus-объект "csqtt" для LuCI (вью — M6b/M6c).
+//
+// Безопасность (контракт M6a):
+//   - все пути зашиты (таблица INSTANCES ниже); ubus-аргумент `instance`
+//     выбирает ОДИН из фиксированных наборов, но НЕ путь — произвольный путь
+//     передать нельзя;
+//   - shell НЕ получает пользовательский ввод: команда собирается из
+//     shellquote()-экранированных элементов (см. run()), ни один аргумент не
+//     подставляется сырым (это же решение использует rpcd-ucode LuCI);
+//   - пользовательский grep компилируется regexp() в try/catch и применяется
+//     внутри ucode — строка пользователя не попадает ни в один процесс;
+//   - на каждый exec — /usr/bin/timeout (пакет coreutils-timeout); на сетевой
+//     API — сокетный таймаут (ucode-mod-socket);
+//   - id профилей/challenge'ей — строгий whitelist-паттерн [A-Za-z0-9_-]+;
+//   - секреты (password, vk_js_token, device_id, vk-хеши, export-ссылки в
+//     логах) наружу не отдаются, кроме profile_export (write-ACL, по запросу).
+//
+// [M8] Портирован на ванильный OpenWrt 25.12 (ucode upstream 2023.07.11):
+//   - fs.popen с МАССИВОМ argv возвращает null (нет поддержки array-exec) —
+//     команда собирается строкой из shellquote()-элементов;
+//   - `uci show -j/--json` не существует — конфиг читается текстовым
+//     `uci show <pkg>` и разбирается в ucode (uciJson → uciShowPkg).
+//
+// [single-instance] Один экземпляр: instance "main" (по умолчанию) — csqtt0,
+// /etc/config/csqtt, /var/run/csqtt/status.json, /var/log/csqtt.log,
+// /etc/init.d/csqtt, helper :8443. Без аргумента instance используется "main" —
+// старые вызовы панели v1 продолжают работать. Устаревший instance "alt"
+// (второй экземпляр) явно отклоняется понятной ошибкой и НЕ перенаправляется
+// молча на основной сервис (DECISIONS D14).
+//
+// Пути можно переопределить env-переменными CSQTT_LUCI_* — это хук для
+// тестов (openwrt/tests/luci/run.sh); ubus-вызывающий их задать не может
+// (env наследуется от процесса rpcd, root-only).
+'use strict';
+
+import * as fs from "fs";
+import * as socket from "socket";
+
+const BIN       = getenv("CSQTT_LUCI_BIN")       || "/usr/bin/csqtt";
+// [057] Ядро 2.1.9 — отдельный пакет csqtt-core-2.1.9 (/usr/bin/csqtt-2.1.9).
+// Управляющий бинарник BIN транспортного ядра не содержит.
+const CORE219   = getenv("CSQTT_LUCI_CORE219")   || "/usr/bin/csqtt-2.1.9";
+// [042] Единственное поставляемое ядро — 2.5.3 (DEFAULT_ENGINE_253_PATH в
+// pool.rs); панель только проверяет наличие файла, ничего не запускает.
+const CORE253   = getenv("CSQTT_LUCI_CORE253")   || "/usr/bin/csqtt-2.5.3";
+// [057] Прежнее ядро 2.5.0: ключ оставлен только для распознавания старой
+// установки и работы со старым backend; новым выпуском не поставляется.
+const CORE250   = getenv("CSQTT_LUCI_CORE250")   || "/usr/bin/csqtt-2.5.0";
+// [r33] Имена пакетов в базах apk/opkg — единственный источник факта
+// «пакет установлен». Наличие одного файла без записи в базе считается
+// остатком прежней установки, а не установленным компонентом.
+const PKG_PANEL  = "luci-app-csqtt";
+const PKG_CORE219 = "csqtt-core-2.1.9";
+const PKG_CORE253 = "csqtt-core-2.5.3";
+const PKG_CORE250 = "csqtt-core-2.5.0";
+const UCIBIN    = getenv("CSQTT_LUCI_UCI")       || "/sbin/uci";
+const LOGREAD   = getenv("CSQTT_LUCI_LOGREAD")   || "/sbin/logread";
+const TIMEOUT   = getenv("CSQTT_LUCI_TIMEOUT")   || "/usr/bin/timeout";
+const HELPER_HOST = getenv("CSQTT_LUCI_HELPER_HOST") || "127.0.0.1";
+// [r31] Базы установленных пакетов читаются только для страницы «О программе»:
+// фактические версии панели и управляющего пакета. apk v3 (25.12) — формат
+// `P:<name>` / `V:<version>`; opkg (24.10) — блоки `Package:` / `Version:`.
+// [058/A5] Без opkg-fallback на 24.10 версии были бы «неизвестно». Пути
+// переопределяются для тестов.
+const APK_DB    = getenv("CSQTT_LUCI_APK_DB")    || "/lib/apk/db/installed";
+const OPKG_DB   = getenv("CSQTT_LUCI_OPKG_DB")   || "/usr/lib/opkg/status";
+
+// Единственный экземпляр. Таблица сохранена с одним ключом "main":
+// resolveInstance("alt"/"1"/"csqtt1") возвращает null → методы отдают понятную
+// ошибку и ничего не делают.
+const INSTANCES = {
+	main: {
+		key: "main",
+		ifname: "csqtt0",
+		config: getenv("CSQTT_LUCI_CONFIG")      || "/etc/config/csqtt",
+		uci:    "csqtt",
+		status: getenv("CSQTT_LUCI_STATUS")      || "/var/run/csqtt/status.json",
+		log:    getenv("CSQTT_LUCI_LOG")         || "/var/log/csqtt.log",
+		init:   getenv("CSQTT_LUCI_INIT")        || "/etc/init.d/csqtt",
+		// [Stage-4] Файл-запрос ручного повтора активной проверки доступа:
+		// демон замечает новый mtime на тике здоровья (дедуп — один запрос).
+		accessRequest: getenv("CSQTT_LUCI_ACCESS_REQ") || "/var/run/csqtt/access-check.request",
+		// [STAGE-5 rev2] Файл-запрос ручного повтора индивидуальной проверки
+		// VK-хешей: демон замечает новый mtime на тике здоровья (тот же
+		// паттерн, что и accessRequest; дедуп — одна проверка на (сессия, набор)).
+		hashRequest: getenv("CSQTT_LUCI_HASH_REQ") || "/var/run/csqtt/hash-check.request",
+		// [052] Файл-запрос ручного DNS-RTT через активный csqtt0. Демон
+		// замечает новый mtime на тике здоровья; сам запрос делает только он.
+		dnsRequest: getenv("CSQTT_LUCI_DNS_RTT_REQ") || "/var/run/csqtt/dns-rtt.request",
+		helperPort: int(getenv("CSQTT_LUCI_HELPER_PORT") || "8443"),
+		// [P3] Каталог резервной копии перед первым явным выбором ядра.
+		// Путь фиксирован; для тестов переопределяется env.
+		backupDir: getenv("CSQTT_LUCI_BACKUP_DIR") || "/etc/csqtt/backups",
+	},
+};
+
+const EXEC_TMO   = 10;    // секунд на exec службы CSQTT/doctor/service
+// [005] doctor последовательно ждёт готовность туннеля (8 с) и опрашивает
+// peer, поэтому в норме занимает ~10 с — ровно предел EXEC_TMO. Отдельный
+// лимит не даёт `timeout` убить проверку на границе (code 124, пустой отчёт).
+const DOCTOR_TMO = 30;
+// [007c] start/restart проходят через ворота init-скрипта: `csqtt doctor`
+// (до 8 с ожидания готовности туннеля + 2 с пробы peer) и затем procd.
+// EXEC_TMO=10 убивал этот путь по таймауту (code 124) до procd_open_instance:
+// панель показывала «Не удалось выполнить действие службы: start», а служба
+// не запускалась. Лимит службы должен быть заведомо больше ворот старта.
+const SERVICE_TMO = 90;
+const HASH_TMO   = 60;    // секунд на доп.валидацию VK-хешей (сетевые VK API)
+const NET_TMO    = 3000;  // мс на connect/recv loopback API
+const LINES_MAX  = 2000;
+const LINES_DEF  = 100;
+
+// [SHARED_SETTINGS] Порядок и состав общих полей (совпадает с
+// scripts/migrate-shared-settings.sh, SHARED_SETTINGS.md §2/§3). Используется
+// только для legacy-детекции в панели: значения НЕ читаются и НЕ отдаются.
+// `obfs` — осознанное per-profile исключение: пустое значение наследует
+// main.obfs, явное `audio`/`video` переопределяет только свой профиль.
+const SHARED_FIELDS = ["vk", "vk_js_token", "vk_hash_mode", "vk_auth_mode",
+	"workers", "turn_transport", "captcha_mode", "fingerprint",
+	"client_ids", "device_id"];
+// Скрипт миграции (пакет luci-app-csqtt, root/usr/libexec/csqtt). Путь/аргументы
+// — константы; ubus-аргументы в shell не попадают. Переопределяется только для
+// тестов (CSQTT_LUCI_MIGRATE), root-процессом rpcd.
+const MIGRATE_SCRIPT = getenv("CSQTT_LUCI_MIGRATE") || "/usr/libexec/csqtt/migrate-shared-settings.sh";
+
+const ID_RE      = regexp("^[A-Za-z0-9_-]+$");
+// [M8] section id профиля по правилам uci.rs — БЕЗ дефиса (challenge-id
+// остаётся на ID_RE). Иначе валидация расходится и LuCI пускает id, который
+// потом отклоняет Rust ("id секции: только [A-Za-z0-9_]").
+const PROFILE_ID_RE = regexp("^[A-Za-z0-9_]+$");
+const TRAIL_NL   = regexp("[\r\n]+$");
+const SERVICE_ACTIONS = ["start", "stop", "restart"];
+const PROFILE_ACTIONS = ["use", "auto", "enable", "disable", "remove"];
+// [FLOOD-RPC] Имя маркера терминальной блокировки VK: обычный файл рядом с
+// status.json (flood.rs MARKER_FILE). Значение по умолчанию совпадает с
+// CSQTT_FLOOD_STATE в etc/init.d/csqtt.
+const FLOOD_MARKER_FILE = "flood-blocked";
+
+// [063] Обновления из опубликованных GitHub Releases. Проверка и установка —
+// это фоновые задания поставляемого установщика (единственный путь, который
+// знает тег, линию OpenWrt, архитектуру, формат IPK/APK, SHA-256 и менеджер
+// пакетов). Из браузера принимаются только component и confirm: URL, тег,
+// пути и хэши определяет роутер. Каталог задания в tmpfs:
+//   job/component/started — что запущено;
+//   log — stdout+stderr установщика вместе с маркерами CSQTT_INSTALLER_*;
+//   rc  — код возврата; отсутствует, пока задание выполняется;
+//   lock/pid — pid процесса установщика (защита от параллельного запуска).
+const UPD_INSTALLER = getenv("CSQTT_LUCI_INSTALLER") || "/usr/libexec/csqtt/install-csqtt.sh";
+// Необязательный файл владельца с точным тегом; имеет приоритет над
+// поставляемым installer-release.conf (передаётся как --release-conf).
+const UPD_CONF_OVERRIDE = getenv("CSQTT_LUCI_RELEASE_CONF") || "/etc/csqtt-installer-release.conf";
+const UPD_DIR     = getenv("CSQTT_LUCI_UPD_DIR") || "/var/run/csqtt-update";
+const UPD_TMO     = int(getenv("CSQTT_LUCI_UPD_TMO") || "900");
+const UPD_LOG_MAX = 6000;      // хвост журнала задания для панели
+const UPD_NOTES_MAX = 4000;    // заметки выпуска — обычный текст, не HTML
+const UPD_PID_RE  = regexp("^[0-9]+$");
+// [063/2] План установки: результат последней успешной проверки. Установка
+// разрешена только по нему — с точным тегом, именем файла, SHA-256 и версией,
+// которые были показаны пользователю. План пишет сам установщик при check.
+const UPD_PLAN    = UPD_DIR + "/plan.json";
+const UPD_TAG_RE  = regexp("^[A-Za-z0-9._/-]+$");
+const UPD_SHA_RE  = regexp("^[0-9a-f]{64}$");
+const UPD_NAME_RE = regexp("^[A-Za-z0-9][A-Za-z0-9._+~-]*$");
+const UPD_VER_RE  = regexp("^[A-Za-z0-9._+~:-]+$");
+// Признаки сетевой причины в сообщении установщика (для отдельного состояния
+// «сеть», а не общей ошибки). Совпадение по подстроке, регистр не важен.
+const UPD_NET_RE  = regexp("сеть|network|загрузить|download|timeout|resolve", "i");
+
+// [Stage-3B] Диагностический бандл: только безопасные поля. Секретные ключи
+// вырезаются, а строковые значения очищаются рекурсивно (sanitizeValue):
+// URL, query-параметры токенов, IPv4 и host:port маскируются. Серверные
+// адреса (health_target, peer) в бандл не включаются. Бандл НЕ отправляется
+// автоматически.
+const MAIN_SAFE = ["enabled", "ifname", "selection_mode", "active_profile",
+	"failover", "failback", "health_mode", "captcha_policy",
+	"vk_auth_mode", "log_level", "log_file"];
+// [P1-SECRETS] Поля main для панели настроек/статуса. Только несекретные
+// значения; полный UCI больше не читается браузером (read-ACL uci снят).
+const MAIN_PANEL = ["enabled", "ifname", "selection_mode", "active_profile",
+	"failover", "failback", "health_interval", "fail_threshold",
+	"success_threshold", "cooldown", "reconnect_delay", "failback_stable_time",
+	"health_mode", "health_target", "log_level", "log_file", "log_size_kb",
+	"schema_version", "obfs", "turn_transport", "tun_address", "tun_mtu", "dns",
+	// [056/PROFILE-1] Несекретные общие поля: нужны редактору первого профиля,
+	// чтобы форма показывала действующие значения main, которые перейдут в
+	// профиль при сохранении. Секреты сюда не входят (только флаг ниже).
+	"workers", "vk_hash_mode", "captcha_mode", "fingerprint", "client_ids"];
+const DIAG_PROFILE_SAFE = ["name", "enabled", "priority", "workers", "obfs",
+	"srtp_mode", "turn_transport", "turn_subnet", "turn_subnet_ip_limit",
+	"captcha_mode", "fingerprint", "note", "core_version",
+	"gooby_mode", "gooby_strategy", "gooby_no_disorder", "gooby_config", "gooby_proxy"];
+// Ключи, которые вырезаются на любом уровне (подстрока, регистр не важен).
+const SECRET_KEY_RE = regexp("password|passwd|secret|token|api_key|device_id|call_id|vk_hash|vk_hashes", "i");
+// [Stage-3B] Ограничения размера бандла и чтения журнала.
+const DIAG_PROFILES_MAX = 64;
+const DIAG_LOG_TAIL_LINES = 200;
+const DIAG_LOG_MAX_BYTES = 262144;      // последние 256 КиБ журнала
+const DIAG_MAX_BUNDLE_BYTES = 524288;   // общий предел сериализованного бандла
+// [Stage-3B] Маскирование в строках: URL целиком, пары key=value с секретами,
+// IPv4/IPv6 и host:port (домен/IP с портом).
+const URL_RE = regexp("[a-z][a-z0-9+.-]*://[^[:space:]]+", "ig");
+const IPV4_RE = regexp("([0-9]{1,3}\\.){3}[0-9]{1,3}", "g");
+const HOSTPORT_RE = regexp("[a-z0-9_-]+(\\.[a-z0-9_-]+)+:[0-9]{1,5}", "ig");
+// [DIAG-FIX E4] IPv6 маскируется отдельно от IPv4: POSIX ERE без lookahead,
+// поэтому покрываем явные формы — bracketed `[addr]`/`[addr]:port`, полную
+// (8 групп) и сжатую (`::`) запись. Простой `HH:MM:SS` не имеет `::` и не
+// состоит из 8 групп, поэтому метки времени не маскируются.
+const BIPV6_RE = regexp("\\[[0-9A-Fa-f:]{2,}\\](:[0-9]{1,5})?", "g");
+const IPV6_FULL_RE = regexp("([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}", "g");
+const IPV6_RE = regexp("([0-9A-Fa-f]{1,4}:)+:[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4})*", "g");
+const IPV6_LEAD_RE = regexp("::[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*", "g");
+const SECRET_PAIR_RE = regexp("(password|passwd|token|access_token|refresh_token|vk_js_token|vk_hash|vk_hashes|device_id|session_token|success_token|call_id|api_key|secret|signature|sig)=[^&[:space:]]+", "ig");
+
+// --- утилиты ---------------------------------------------------------------
+
+// Пояснение к отказу на устаревший/неизвестный instance (единая формулировка).
+const INSTANCE_ERR = "instance: поддерживается только \"main\" (второй экземпляр удалён)";
+
+// instance: принимается только "main"/""/0 (обратная совместимость панели v1).
+// Устаревший "alt"/"1"/"csqtt1" и любое неизвестное значение → null (отказ),
+// без неявного выбора основного сервиса.
+function resolveInstance(name) {
+	if (name == null || name == "" || name == "main" || name == "0" || name == 0)
+		return INSTANCES.main;
+	return null;
+}
+
+function isId(s) {
+	return (type(s) == "string" && match(s, ID_RE) != null);
+}
+
+// id секции профиля: правила uci.rs — [A-Za-z0-9_] (без дефиса). [M8]
+function isProfileId(s) {
+	return (type(s) == "string" && match(s, PROFILE_ID_RE) != null);
+}
+
+// shellquote — POSIX-безопасное экранирование одного argv-элемента (та же
+// реализация, что в rpcd-ucode LuCI: одиночные кавычки + '\'' для апострофа).
+// Именно это не даёт пользовательским строкам (name/link/id) выйти за пределы
+// своего аргумента, хотя popen исполняется интерпретатором.
+function shellquote(s) {
+	return "'" + replace("" + s, "'", "'\\''") + "'";
+}
+
+// exec-хелпер: /usr/bin/timeout <tmo> <argv...>; возвращает {code, out}.
+// [M8] Строковая форма popen (array-popen отсутствует в ucode 2023.07.11);
+// каждый элемент экранирован shellquote — сырой ввод в shell не попадает.
+function run(argv, tmo) {
+	let cmd = shellquote(TIMEOUT) + " " + shellquote("" + (tmo != null ? tmo : EXEC_TMO));
+	for (let i = 0; i < length(argv); i++)
+		cmd += " " + shellquote("" + argv[i]);
+	// [M8] CLI пишет часть ошибок в stderr; без `2>&1` LuCI показывал только
+	// «ERROR (code N)» без причины (напр. «конфиг после импорта невалиден»).
+	let p = fs.popen(cmd + " 2>&1", "r");
+	if (p == null)
+		return { code: -1, out: "" };
+	// fs.proc не поддерживает read("*a") — читаем построчно до EOF.
+	let out = "", line;
+	while ((line = p.read("line")) != null)
+		out += line;
+	let code = p.close();
+	return { code: code, out: out };
+}
+
+function strip(s) {
+	return trim(replace(s, TRAIL_NL, ""));
+}
+
+// [P7] Наличие файла без запуска и без чтения содержимого.
+function fileInstalled(path) {
+	try { return fs.access(path) == true; } catch (e) { return false; }
+}
+
+// [054] Один и тот же управляющий бинарник используют служба (init.d) и RPC.
+// Если его нет, методы обязаны вернуть явную ошибку: нельзя выдавать «пустой
+// успех» проверки хешей или состояние «running» по коду 127 от shell.
+function binMissingError() {
+	return "управляющий бинарник не найден или не исполняемый: " + BIN;
+}
+
+// [042][r33] Инвентарь ядер. Канонический ключ нового выпуска — "2.5.3";
+// старый ключ "2.5.0" отдаётся только если файл прежнего ядра действительно
+// есть (распознавание старой установки, не обещание поддержки — см. 057).
+// Наличие ядра — это пакет в apk/opkg И собственный исполняемый файл:
+// * installed — оба признака;
+// * damaged   — пакет зарегистрирован, файла нет (повреждённая установка);
+// * leftover  — файл есть, пакета нет (остаток, не штатная установка);
+// * missing   — нет ни пакета, ни файла.
+// `runnable` отвечает на другой вопрос: может ли служба запустить это ядро
+// сейчас. Для 2.1.9 это возможно и без отдельного пакета — встроенная
+// поддержка управляющего слоя; она не делает ядро установленным.
+function coreEntryState(pkgRegistered, filesPresent) {
+	if (pkgRegistered && filesPresent)
+		return "installed";
+	if (pkgRegistered)
+		return "damaged";
+	if (filesPresent)
+		return "leftover";
+	return "missing";
+}
+
+function coreRunnable(core, filesPresent, builtin) {
+	if (filesPresent)
+		return true;
+	return core == "2.1.9" && builtin === true;
+}
+
+function coreEntry(version, pkg, path, pkgs, builtin) {
+	let pv = (pkgs[pkg] != null) ? "" + pkgs[pkg] : null;
+	let registered = pv != null;
+	let files = fileInstalled(path);
+	let state = coreEntryState(registered, files);
+	return {
+		installed: state == "installed",
+		package: registered,
+		package_version: pv,
+		files: files,
+		state: state,
+		path: path,
+		runnable: coreRunnable(version, files, builtin),
+	};
+}
+
+function coreInventory(pkgs, builtin) {
+	let cores = {
+		"2.1.9": coreEntry("2.1.9", PKG_CORE219, CORE219, pkgs, builtin),
+		"2.5.3": coreEntry("2.5.3", PKG_CORE253, CORE253, pkgs, false),
+	};
+	if (fileInstalled(CORE250))
+		cores["2.5.0"] = coreEntry("2.5.0", PKG_CORE250, CORE250, pkgs, false);
+	return cores;
+}
+
+// [r33] Панель — отдельный компонент: её наличие определяется пакетом в базе
+// apk/opkg. Файлы панели не проверяются: страница уже исполняется из них.
+function panelEntry(pkgs) {
+	let v = (pkgs[PKG_PANEL] != null) ? "" + pkgs[PKG_PANEL] : null;
+	return { installed: v != null, version: v };
+}
+
+function readStatusJson(inst) {
+	let txt;
+	try {
+		txt = fs.readfile(inst.status);
+	} catch (e) {
+		return null;
+	}
+	if (txt == null)
+		return null;
+	try {
+		return json(txt);
+	} catch (e) {
+		return null;
+	}
+}
+
+function tailLines(lines, n) {
+	if (n <= 0 || length(lines) <= n)
+		return lines;
+	let out = [];
+	for (let i = length(lines) - n; i < length(lines); i++)
+		push(out, lines[i]);
+	return out;
+}
+
+// [Stage-3B] Очистка строки от секретов и адресов: URL целиком, пары
+// `key=value` с секретными ключами, IPv4, IPv6 (bracketed/полная/сжатая) и
+// host:port маскируются на `***`.
+function redactText(s) {
+	if (type(s) != "string")
+		return s;
+	s = replace(s, URL_RE, "***");
+	s = replace(s, SECRET_PAIR_RE, "***");
+	s = replace(s, BIPV6_RE, "***");
+	s = replace(s, IPV6_FULL_RE, "***");
+	s = replace(s, IPV6_RE, "***");
+	s = replace(s, IPV6_LEAD_RE, "***");
+	s = replace(s, HOSTPORT_RE, "***");
+	return replace(s, IPV4_RE, "***");
+}
+
+// [Stage-3B] Рекурсивная очистка значения: секретные ключи вырезаются, строки
+// прогоняются через redactText. Работает для вложенных объектов и массивов.
+function sanitizeValue(v) {
+	if (type(v) == "array") {
+		let out = [];
+		for (let i = 0; i < length(v); i++)
+			push(out, sanitizeValue(v[i]));
+		return out;
+	}
+	if (type(v) == "object" && v != null) {
+		let out = {};
+		for (let k in v) {
+			if (match(k, SECRET_KEY_RE) != null)
+				continue;
+			out[k] = sanitizeValue(v[k]);
+		}
+		return out;
+	}
+	return redactText(v);
+}
+
+// [Stage-3B] Модель устройства для отчёта поддержке; null, если недоступна.
+function readDeviceModel() {
+	let paths = ["/proc/device-tree/model", "/etc/openwrt_release"];
+	for (let i = 0; i < length(paths); i++) {
+		let txt;
+		try {
+			txt = fs.readfile(paths[i]);
+		} catch (e) {
+			txt = null;
+		}
+		if (txt != null && trim(txt) != "")
+			return trim(split(replace(txt, TRAIL_NL, ""), "\n")[0]);
+	}
+	return null;
+}
+
+// [Stage-3B] Хвост журнала с ОГРАНИЧЕННЫМ потреблением памяти: файл читается
+// потоково (chunk 16 КиБ), в памяти удерживаются только последние
+// DIAG_LOG_MAX_BYTES байт. Возвращает { lines, truncated, ok }.
+function readLogTail(path, n) {
+	let f;
+	try {
+		f = fs.open(path, "r");
+	} catch (e) {
+		f = null;
+	}
+	if (f == null)
+		return { lines: [], truncated: false, ok: false };
+	let keep = "", total = 0, chunk;
+	while ((chunk = f.read(16384)) != null) {
+		if (length(chunk) == 0)
+			break;
+		total += length(chunk);
+		keep += chunk;
+		if (length(keep) > DIAG_LOG_MAX_BYTES)
+			keep = substr(keep, length(keep) - DIAG_LOG_MAX_BYTES, DIAG_LOG_MAX_BYTES);
+	}
+	f.close();
+	let truncated = (total > DIAG_LOG_MAX_BYTES);
+	let parts = split(keep, "\n");
+	let lines = [];
+	for (let i = 0; i < length(parts); i++)
+		if (!(i == length(parts) - 1 && parts[i] == ""))
+			push(lines, parts[i]);
+	let from = 0;
+	if (truncated && length(lines) > 0)
+		from = 1;              // первая строка обрезана посередине
+	if (length(lines) - from > n)
+		from = length(lines) - n;
+	let out = [];
+	for (let i = from; i < length(lines); i++)
+		push(out, redactText(lines[i]));
+	return { lines: out, truncated: truncated, ok: true };
+}
+
+// Фильтр по пользовательскому регэкспу (case-insensitive). null — если
+// регэксп скомпилировать не удалось (сигнализирует ошибку вызывающему).
+function grepLines(lines, pattern) {
+	if (pattern == null || pattern == "")
+		return lines;
+	let re;
+	try {
+		re = regexp(pattern, "i");
+	} catch (e) {
+		return null;
+	}
+	let out = [];
+	for (let i = 0; i < length(lines); i++)
+		if (match(lines[i], re) != null)
+			push(out, lines[i]);
+	return out;
+}
+
+// Минимальный HTTP-клиент loopback API (helper, M4e). Возвращает
+// {ok, status, body} или {ok:false, error}.
+function apiHttp(port, method, path) {
+	let s;
+	try {
+		s = socket.connect(HELPER_HOST, port, null, NET_TMO);
+	} catch (e) {
+		return { ok: false, error: "helper API недоступен" };
+	}
+	if (s == null)
+		return { ok: false, error: "helper API недоступен" };
+	try {
+		s.send(method + " " + path + " HTTP/1.1\r\nHost: " + HELPER_HOST +
+			"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+		let buf = "", c;
+		while ((c = s.recv(4096)) && length(c) > 0)
+			buf += c;
+		s.close();
+		let sep = index(buf, "\r\n\r\n");
+		if (sep < 0)
+			return { ok: false, error: "некорректный ответ helper API" };
+		let st = 0;
+		let m = match(substr(buf, 0, sep), regexp("^HTTP/[0-9.]+ ([0-9]{3})"));
+		if (m != null)
+			st = int(m[1]);
+		return { ok: true, status: st, body: substr(buf, sep + 4) };
+	} catch (e) {
+		try { s.close(); } catch (e2) {}
+		return { ok: false, error: "ошибка helper API: " + e };
+	}
+}
+
+function parseJson(text) {
+	try {
+		return json(text);
+	} catch (e) {
+		return null;
+	}
+}
+
+// --- методы ubus-объекта "csqtt" -------------------------------------------
+
+// Разворачивание значения из `uci show` (одиночные кавычки; '\'' → ').
+function uciUnquote(v) {
+	if (length(v) >= 2 && substr(v, 0, 1) == "'" && substr(v, length(v) - 1, 1) == "'")
+		v = substr(v, 1, length(v) - 2);
+	return replace(v, "'\\''", "'");
+}
+
+// [M8] `uci show -j` на ванильном OpenWrt нет — читаем текстовый
+// `uci show <pkg>` и собираем {section: {".type", opt: val, ...}} в ucode.
+function uciShowPkg(pkg) {
+	let r = run([UCIBIN, "show", pkg], EXEC_TMO);
+	if (r.code != 0)
+		return null;
+	let prefix = pkg + ".";
+	let cfg = {};
+	let lines = split(replace(r.out, TRAIL_NL, ""), "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let ln = lines[i];
+		if (substr(ln, 0, length(prefix)) != prefix)
+			continue;
+		ln = substr(ln, length(prefix));
+		let eq = index(ln, "=");
+		if (eq < 0)
+			continue;
+		let key = substr(ln, 0, eq), val = substr(ln, eq + 1);
+		let dot = index(key, ".");
+		if (dot < 0) {
+			if (cfg[key] == null)
+				cfg[key] = {};
+			cfg[key][".type"] = val;
+		} else {
+			let sec = substr(key, 0, dot), opt = substr(key, dot + 1);
+			if (cfg[sec] == null)
+				cfg[sec] = {};
+			cfg[sec][opt] = uciUnquote(val);
+		}
+	}
+	return cfg;
+}
+
+// [r33] Встроенная поддержка 2.1.9 в управляющем слое — это ВОЗМОЖНОСТЬ
+// контроллера, а не установленный отдельный пакет. До r33 legacyCoreInstalled()
+// возвращал true по одной строке `csqtt version` («2.1.9 (in-process)»), и после
+// установки только панели с ядром 2.5.3 инвентарь врал «2.1.9 — Установлено».
+// Функция оставлена только для поля capabilities/builtin и runnable 2.1.9.
+function hasBuiltInLegacy(binaryInstalled, version) {
+    return binaryInstalled && index(version, "external only") < 0 && (index(version, "2.1.9 (in-process)") >= 0 || index(version, "csqtt 2.1.9") >= 0);
+}
+
+// [r31] Фактические версии установленных пакетов из баз apk и opkg. Только эти
+// имена: страница «О программе» не должна угадывать версии по константам.
+// [058/A5] apk (25.12) — `P:`/`V:`; opkg (24.10) — блоки `Package:`/`Version:`.
+// Источники дополняют друг друга: первый найденный вариант остаётся. Ошибка
+// чтения не ломает статус: отсутствующая версия — null, панель скажет
+// «не установлен» / «версия неизвестна».
+function parseApkVersions(txt, want, out) {
+	let lines = split(replace(txt, TRAIL_NL, ""), "\n");
+	let current = null;
+	for (let i = 0; i < length(lines); i++) {
+		let line = lines[i];
+		if (substr(line, 0, 2) == "P:")
+			current = substr(line, 2);
+		else if (substr(line, 0, 2) == "V:" && current != null
+			&& index(want, current) >= 0 && out[current] == null)
+			out[current] = substr(line, 2);
+	}
+}
+
+function parseOpkgVersions(txt, want, out) {
+	let lines = split(replace(txt, TRAIL_NL, ""), "\n");
+	let current = null;
+	for (let i = 0; i < length(lines); i++) {
+		let line = lines[i];
+		if (length(line) == 0)
+			current = null;                 // пустая строка — конец блока
+		else if (substr(line, 0, 8) == "Package:")
+			current = trim(substr(line, 8));
+		else if (substr(line, 0, 8) == "Version:" && current != null
+			&& index(want, current) >= 0 && out[current] == null)
+			out[current] = trim(substr(line, 8));
+	}
+}
+
+function packageVersions() {
+	let out = {};
+	let want = [PKG_PANEL, PKG_CORE219, PKG_CORE253, PKG_CORE250];
+	let apk;
+	try { apk = fs.readfile(APK_DB); } catch (e) { apk = null; }
+	if (apk != null)
+		parseApkVersions(apk, want, out);
+	let opkg;
+	try { opkg = fs.readfile(OPKG_DB); } catch (e) { opkg = null; }
+	if (opkg != null)
+		parseOpkgVersions(opkg, want, out);
+	return out;
+}
+
+// [063/G] Возможности Gooby у конкретного движка. `csqtt version` описывает
+// управляющий слой и его target-core, а не любой установленный бинарник:
+// при нескольких ядрах один маркер нельзя переносить на выбранный профиль.
+// Поэтому основное доказательство — сам бинарник движка (имена long-опций
+// Gooby в ELF); маркер control-слоя принимается только при подтверждённом
+// target-core, иначе возможность неизвестна (null), а не «есть».
+function versionTargetCore(out, core) {
+	let lines = split(replace(out || "", TRAIL_NL, ""), "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let line = lines[i];
+		if (substr(line, 0, 12) != "target-core:")
+			continue;
+		if (core == "2.5.3" && index(line, "2.5.3") >= 0)
+			return true;
+		if (core == "2.5.0" && index(line, "2.5.0") >= 0)
+			return true;
+	}
+	return false;
+}
+
+function engineGoobyCapability(core) {
+	if (core == "2.1.9" || core == "auto" || core == "")
+		return { gooby: false, evidence: "unsupported-core" };
+	let path = (core == "2.5.3") ? CORE253 : (core == "2.5.0") ? CORE250 : "";
+	if (path == "")
+		return { gooby: null, evidence: "unknown-core" };
+	if (!fileInstalled(path))
+		return { gooby: null, evidence: "missing-core" };
+	let txt = null;
+	try { txt = fs.readfile(path); } catch (e) { txt = null; }
+	if (txt != null)
+		return (index(txt, "--gooby") >= 0)
+			? { gooby: true, evidence: "engine-binary" }
+			: { gooby: false, evidence: "engine-binary-no-gooby" };
+	// Бинарник не читается (нет прав/неожиданный формат) — маркер допустим
+	// только при явном target-core, совпадающем с выбранной веткой.
+	let v = run([BIN, "version"], EXEC_TMO);
+	if (v.code == 0 && index(v.out || "", "gooby-transport: 1") >= 0
+		&& versionTargetCore(v.out || "", core))
+		return { gooby: true, evidence: "control-target-core" };
+	return { gooby: null, evidence: "unreadable-core" };
+}
+
+function mEngineCaps(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { error: INSTANCE_ERR };
+	let cores = {};
+	let list = ["2.5.3", "2.5.0", "2.1.9"];
+	for (let i = 0; i < length(list); i++)
+		cores[list[i]] = engineGoobyCapability(list[i]);
+	return { ok: true, instance: inst.key, cores: cores };
+}
+
+function mStatus(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { error: INSTANCE_ERR };
+	let r = run([BIN, "status", "--json", "--status-path", inst.status], EXEC_TMO);
+	let version = run([BIN, "version"], EXEC_TMO);
+	// [r33] Встроенная совместимость контроллера — только возможность.
+	// Наличие ядра 2.1.9 определяется пакетом csqtt-core-2.1.9 и его файлом
+	// (см. coreInventory); строка `csqtt version` больше не выдаёт его за
+	// установленный отдельный пакет.
+	let binOk = fileInstalled(BIN);
+	let builtin219 = version.code == 0 && hasBuiltInLegacy(binOk, version.out || "");
+	let pkgs = packageVersions();
+	// [049] Возможности — по реальной сборке, не по номеру версии: панель
+	// разбирает машинный маркер `gooby-transport: 1` в `csqtt version`.
+	// Отсутствие бинарника/маркера → false: UI покажет объяснение и не станет
+	// обещать неподтверждённую функцию.
+	let capabilities = {
+		gooby: version.code == 0 && index(version.out || "", "gooby-transport: 1") >= 0,
+		// [r33] Встроенная совместимость управляющего слоя с 2.1.9. Это
+		// возможность контроллера, а не отдельный установленный пакет.
+		legacy_2_1_9: builtin219,
+	};
+	let st = (r.out != "") ? parseJson(r.out) : null;
+	// [054][r33] Отсутствующий бинарник — явная ошибка. Раньше код 127 от shell
+	// давал running=true («Connecting…» навсегда): состояние больше не врёт.
+	// binOk вычислен выше и используется также для встроенной поддержки 2.1.9.
+	// [P7] Маркер Flood мог быть снят вручную (clear-flood). status.json в
+	// остановленной службе ещё содержит старую запись — показываем только
+	// факт, подтверждённый диском, иначе баннер врал бы о блокировке.
+	if (st != null && st.flood != null) {
+		let marker = st.flood.marker;
+		if (type(marker) == "string" && marker != "") {
+			st.flood.marker_present = fileInstalled(marker);
+			if (!st.flood.marker_present)
+				st.flood = null;
+		}
+	}
+	// [P1-SECRETS] Безопасный снимок main и профилей для страницы статуса:
+	// браузер больше не читает UCI-пакет целиком (read-ACL uci снят).
+	let cfg = uciShowPkg(inst.uci);
+	let main_safe = {};
+	let profiles_safe = [];
+	if (cfg != null) {
+		if (cfg.main != null) {
+			let keys = ["ifname", "schema_version", "obfs", "turn_transport",
+				"selection_mode", "active_profile"];
+			for (let i = 0; i < length(keys); i++) {
+				let k = keys[i];
+				if (cfg.main[k] != null)
+					main_safe[k] = "" + cfg.main[k];
+			}
+		}
+		for (let id in cfg) {
+			let sec = cfg[id];
+			if (sec == null || sec[".type"] != "server")
+				continue;
+			let p = { id: id };
+			let keys = ["name", "enabled", "peer", "turn_transport", "obfs",
+				"srtp_mode", "core_version"];
+			for (let i = 0; i < length(keys); i++) {
+				let k = keys[i];
+				if (sec[k] != null)
+					p[k] = "" + sec[k];
+			}
+			push(profiles_safe, p);
+		}
+	}
+	return {
+		instance: inst.key,
+		code: r.code,                 // 0=connected, 1=not connected, 2=not running
+		// [054] Процесс считается запущенным только по контракту кодов статуса;
+		// отсутствие бинарника (127) — не «running», а явная ошибка.
+		running: binOk && (r.code == 0 || r.code == 1),
+		connected: binOk && r.code == 0,
+		binary_ok: binOk,
+		error: binOk ? null : binMissingError(),
+		// [042][r33] Инвентарь ядер: пакет apk/opkg + собственный файл.
+		// Встроенная совместимость 2.1.9 в контроллере НЕ делает ядро
+		// установленным; она отдаётся в capabilities и в cores[*].runnable.
+		// Канонический ключ — "2.5.3"; "2.5.0" отдаётся только для
+		// распознавания старой установки (совместимость панели, 057).
+		cores: coreInventory(pkgs, builtin219),
+		// [r33] Панель — независимый компонент, отдельно от ядер.
+		panel: panelEntry(pkgs),
+		main: main_safe,
+		profiles: profiles_safe,
+		// [049] Возможности движка по реальной реализации (не по версии).
+		capabilities: capabilities,
+		// [r31][058/A5] Фактические версии пакетов (apk/opkg DB), не константы панели.
+		packages: pkgs,
+		status: (st != null ? st : {}),
+	};
+}
+
+// [P7] Явное ручное снятие Flood. init-скрипт удаляет маркер и ОСТАНАВЛИВАЕТ
+// службу: подключение и запросы к VK не запускаются. Пользователь затем сам
+// нажимает «Запустить».
+function mFloodClear(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let r = run([inst.init, "clear-flood"], EXEC_TMO);
+	return {
+		ok: r.code == 0,
+		code: r.code,
+		action: "clear-flood",
+		output: strip(r.out),
+		note: "Flood marker cleared; the service stays stopped. Start it explicitly to reconnect.",
+	};
+}
+
+function mLogs(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { error: INSTANCE_ERR, lines: [] };
+	let a = req.args;
+	let source = (a.source != null ? a.source : "file");
+	let n = (a.lines != null ? a.lines : LINES_DEF);
+	if (n < 1) n = 1;
+	if (n > LINES_MAX) n = LINES_MAX;
+
+	let lines = [];
+	if (source == "syslog") {
+		// procd пишет stdout/stderr сервиса с тегом имени сервиса (csqtt).
+		// [M8] logread-ubox не поддерживает `-n` — хвост ограничиваем сами.
+		let r = run([LOGREAD, "-e", "csqtt"], EXEC_TMO);
+		if (r.code != 0 && r.out == "")
+			return { error: "logread вернул код " + r.code, lines: [] };
+		lines = split(replace(r.out, TRAIL_NL, ""), "\n");
+	} else if (source == "file") {
+		let txt;
+		try {
+			txt = fs.readfile(inst.log);
+		} catch (e) {
+			return { error: "лог-файл недоступен", lines: [] };
+		}
+		if (txt == null)
+			return { error: "лог-файл не найден", lines: [] };
+		lines = split(replace(txt, TRAIL_NL, ""), "\n");
+	} else {
+		return { error: "source: file|syslog", lines: [] };
+	}
+
+	lines = tailLines(lines, n);
+	if (a.grep != null && a.grep != "") {
+		let filtered = grepLines(lines, a.grep);
+		if (filtered == null)
+			return { error: "некорректный регэксп в grep", lines: [] };
+		lines = filtered;
+	}
+	return { instance: inst.key, source: source, count: length(lines), lines: lines };
+}
+
+function mLogsClear(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let size = 0;
+	let st = null;
+	try {
+		st = fs.stat(inst.log);
+	} catch (e) {}
+	if (st != null)
+		size = st.size;
+	let f;
+	try {
+		f = fs.open(inst.log, "w");   // truncate-to-zero, права сохраняются
+	} catch (e) {
+		return { ok: false, error: "не удалось очистить лог" };
+	}
+	if (f == null)
+		return { ok: false, error: "не удалось очистить лог" };
+	f.close();
+	return { ok: true, instance: inst.key, cleared_bytes: size };
+}
+
+function mService(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let action = req.args.action;
+	let allowed = false;
+	for (let i = 0; i < length(SERVICE_ACTIONS); i++)
+		if (SERVICE_ACTIONS[i] == action)
+			allowed = true;
+	if (!allowed)
+		return { ok: false, error: "action: start|stop|restart" };
+	let r = run([inst.init, action], SERVICE_TMO);
+	let ok = r.code == 0;
+	// [054] Причина отказа видна панели (например, «бинарник не найден» из
+	// init.d), а не только числовой код 127 от shell.
+	return { ok: ok, instance: inst.key, action: action, code: r.code,
+		output: strip(r.out), error: ok ? null : strip(r.out) };
+}
+
+// [Stage-4] Ручной повтор активной проверки доступа из панели. Сама проверка
+// выполняется ТОЛЬКО демоном (привязка к csqtt0, один запрос на сессию):
+// rpcd лишь обновляет файл-запрос, который драйвер замечает на тике здоровья
+// (дедуп по mtime — опросы и несколько вкладок не размножают проверки).
+// Сетевых запросов отсюда нет; секретов нет.
+function mAccessCheck(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let f;
+	try {
+		f = fs.open(inst.accessRequest, "w");
+	} catch (e) {
+		return { ok: false, error: "не удалось запросить проверку" };
+	}
+	if (f == null)
+		return { ok: false, error: "не удалось запросить проверку" };
+	try {
+		f.write("" + time() + "\n");
+	} catch (e) {}
+	f.close();
+	return { ok: true, instance: inst.key };
+}
+
+// [FLOOD-RPC] Путь маркера терминальной блокировки VK. Ядро/супервизор кладут
+// маркер рядом с status.json; статус несёт его точный путь (`flood.marker`),
+// и именно этот файл удаляет `clear-flood`. Если status.json недоступен или
+// пуст — берём соглашение о соседнем файле (flood.rs marker_path).
+function floodMarkerPath(inst) {
+	let st = readStatusJson(inst);
+	if (st != null && st.flood != null && type(st.flood.marker) == "string" && st.flood.marker != "")
+		return st.flood.marker;
+	return replace(inst.status, /\/[^\/]+$/, "") + "/" + FLOOD_MARKER_FILE;
+}
+
+// [FLOOD-RPC] Терминальная блокировка VK активна тогда и только тогда, когда
+// маркер реально лежит на диске (та же проверка, что в mStatus: старый
+// status.json остановленной службы не должен выдавать снятую блокировку).
+function floodActive(inst) {
+	return fileInstalled(floodMarkerPath(inst));
+}
+
+// [STAGE-5 rev2] Ручной повтор индивидуальной проверки VK-хешей из панели.
+// Сама проверка выполняется ТОЛЬКО демоном (один запуск на (сессия, набор),
+// manual-режим; в auto_js/auto_api вызовов не создаётся): rpcd лишь обновляет
+// файл-запрос, который драйвер замечает на тике здоровья (дедуп по mtime —
+// опросы и несколько вкладок не размножают проверки). Результат ложится в
+// status.json без переподключения. Сетевых запросов отсюда нет; секретов нет.
+//
+// [FLOOD-RPC] Защита от Flood действует ЗДЕСЬ, в backend/RPC: пока маркер
+// терминальной блокировки VK на диске, повторная проверка хешей запрещена и
+// файл-запрос не создаётся вовсе. Иначе кнопка панели снова обратилась бы к VK
+// и продлила Flood. Отказ терминальный и одинаков для первого и повторного
+// вызова: сетевых обращений к VK при активном Flood не происходит.
+function mTurnProbe(req) {
+    let r = run([BIN, "turn-probe"], EXEC_TMO);
+    let rows = parseJson(r.out);
+    return { ok: r.code == 0 && type(rows) == "array", subnets: rows || [] };
+}
+
+function mHashRecheck(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (floodActive(inst))
+		return {
+			ok: false,
+			reason: "flood_control",
+			error: "VK Flood control is active — the hash check is unavailable until the marker is cleared.",
+		};
+	let f;
+	try {
+		f = fs.open(inst.hashRequest, "w");
+	} catch (e) {
+		return { ok: false, error: "не удалось запросить проверку" };
+	}
+	if (f == null)
+		return { ok: false, error: "не удалось запросить проверку" };
+	try {
+		f.write("" + time() + "\n");
+	} catch (e) {}
+	f.close();
+	return { ok: true, instance: inst.key };
+}
+
+// [052] Ручной DNS-RTT через активный csqtt0. Замер выполняет ТОЛЬКО демон
+// (SO_BINDTODEVICE=csqtt0, без WAN-fallback); rpcd лишь обновляет файл-запрос,
+// который драйвер замечает на тике здоровья (дедуп по mtime). При активном
+// Flood запрос не создаётся: кнопка не должна обходить терминальную блокировку.
+// Сетевых запросов и секретов здесь нет.
+function mDnsRtt(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (floodActive(inst))
+		return {
+			ok: false,
+			reason: "flood_control",
+			error: "VK Flood control is active — the DNS RTT check is unavailable until the marker is cleared.",
+		};
+	let f;
+	try {
+		f = fs.open(inst.dnsRequest, "w");
+	} catch (e) {
+		return { ok: false, error: "не удалось запросить замер DNS" };
+	}
+	if (f == null)
+		return { ok: false, error: "не удалось запросить замер DNS" };
+	// [055/§26] Ошибка записи заявки не должна выглядеть успехом: демон
+	// заметил бы только новый mtime, а панель ждала бы результат впустую.
+	let txt = "" + time() + "\n", wrote = null;
+	try {
+		wrote = f.write(txt);
+	} catch (e) {
+		wrote = null;
+	}
+	try { f.close(); } catch (e) {}
+	if (wrote == null || wrote != length(txt))
+		return { ok: false, error: "не удалось записать запрос замера DNS" };
+	return { ok: true, instance: inst.key };
+}
+
+function mTestConf(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let r = run([BIN, "doctor", "--json", "--config", inst.config,
+		"--status-path", inst.status], DOCTOR_TMO);
+	let report = (r.out != "") ? parseJson(r.out) : null;
+	return {
+		ok: r.code == 0,
+		instance: inst.key,
+		code: r.code,                 // 0=OK, 1=WARN, 2=FAIL (контракт doctor)
+		report: (report != null ? report : {}),
+	};
+}
+
+// [Stage-3B] Единый диагностический бандл для поддержки. Только безопасные
+// поля: версия/устройство/безопасные параметры/статус/результаты doctor/хвост
+// журнала. Секреты, device_id и токены не включаются; статус очищается
+// рекурсивно, журнал — построчно. Скачивается вручную, автоматически не
+// отправляется.
+function mDiag(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let notes = [];
+	let bundle = {
+		kind: "csqtt-diagnostics",
+		schema: 1,
+		instance: inst.key,
+		version: null,
+		engine: null,
+		device: null,
+		config: {},
+		profiles: [],
+		status: null,
+		doctor: null,
+		log_tail: [],
+		log_truncated: false,
+		notes: notes,
+		complete: true,
+	};
+	let vr = run([BIN, "version"], EXEC_TMO);
+	if (vr.code == 0 && trim(vr.out) != "")
+		bundle.version = redactText(strip(vr.out));
+	else
+		push(notes, "version недоступна");
+
+	let dev = readDeviceModel();
+	if (dev != null)
+		bundle.device = redactText(dev);
+	else
+		push(notes, "устройство не определено");
+
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null) {
+		push(notes, "параметры UCI недоступны");
+	} else {
+		let safe = {};
+		let main = cfg.main;
+		if (main != null) {
+			for (let i = 0; i < length(MAIN_SAFE); i++) {
+				let k = MAIN_SAFE[i];
+				if (main[k] != null)
+					safe[k] = "" + main[k];
+			}
+		}
+		bundle.config = sanitizeValue(safe);
+		let count = 0;
+		for (let id in cfg) {
+			let sec = cfg[id];
+			if (sec == null || sec[".type"] != "server")
+				continue;
+			if (count >= DIAG_PROFILES_MAX) {
+				push(notes, "список профилей усечён");
+				break;
+			}
+			count++;
+			let p = { id: id };
+			for (let i = 0; i < length(DIAG_PROFILE_SAFE); i++) {
+				let k = DIAG_PROFILE_SAFE[i];
+				if (sec[k] != null)
+					p[k] = "" + sec[k];
+			}
+			push(bundle.profiles, sanitizeValue(p));
+		}
+	}
+
+	let sr = run([BIN, "status", "--json", "--status-path", inst.status], EXEC_TMO);
+	let st = (sr.out != "") ? parseJson(sr.out) : null;
+	if (st != null)
+		bundle.status = sanitizeValue(st);
+	else
+		push(notes, "status недоступен или повреждён");
+
+	// [055/§26] Фактическая версия клиентского движка — из status.engine
+	// (запущенный процесс), а не из текста `csqtt version`: там целевой пакет
+	// и версия исходника снимка, которые не равны исполняемому движку.
+	if (st != null && st.engine != null && type(st.engine) == "object") {
+		let e = st.engine;
+		bundle.engine = {
+			kind: (type(e.kind) == "string") ? e.kind : null,
+			core: (type(e.core) == "string") ? e.core : null,
+			binary_version: (type(e.binary_version) == "string") ? e.binary_version : null,
+			session: (type(e.session) == "int") ? e.session : null,
+		};
+	} else {
+		push(notes, "фактический движок не определён (status.engine отсутствует)");
+	}
+
+	let dr = run([BIN, "doctor", "--json", "--config", inst.config,
+		"--status-path", inst.status], DOCTOR_TMO);
+	let rep = (dr.out != "") ? parseJson(dr.out) : null;
+	if (rep != null)
+		bundle.doctor = sanitizeValue(rep);
+	else
+		push(notes, "проверка doctor не отработала (код " + dr.code + ")");
+
+	let log = readLogTail(inst.log, DIAG_LOG_TAIL_LINES);
+	bundle.log_tail = log.lines;
+	bundle.log_truncated = log.truncated;
+	if (!log.ok)
+		push(notes, "журнал недоступен");
+	else if (log.truncated)
+		push(notes, "журнал усечён (последние " + (DIAG_LOG_MAX_BYTES / 1024) + " КиБ)");
+
+	bundle.complete = (length(notes) == 0);
+	// Общий предел: при превышении оставляем только безопасные параметры,
+	// профили и обрезанный журнал, а тяжёлые status/doctor отбрасываем.
+	let text = sprintf("%.J", bundle);
+	if (length(text) > DIAG_MAX_BUNDLE_BYTES) {
+		bundle.status = null;
+		bundle.doctor = null;
+		bundle.log_tail = [];
+		bundle.log_truncated = true;
+		push(notes, "отчёт усечён из-за размера");
+		bundle.complete = false;
+	}
+	return { ok: true, instance: inst.key, bundle: bundle };
+}
+
+// Профили из UCI: только safe-поля; секреты вырезаются явно.
+// [M6c] добавлены note/captcha_mode (не секреты; нужны вью profiles.js).
+const PROFILE_SAFE = ["name", "enabled", "priority", "peer", "workers",
+	"obfs", "srtp_mode", "turn_transport", "turn_subnet", "turn_subnet_ip_limit",
+	"captcha_mode", "fingerprint",
+	"note", "core_version", "vk_hash_mode", "vk_auth_mode", "client_ids",
+	"fail_threshold", "success_threshold", "cooldown", "captcha_policy",
+	"tun_address", "tun_mtu", "dns",
+	// [049] Gooby (per-profile, только 2.5.3). Не секреты: путь к ZIP и
+	// локальный loopback-адрес. Нужны редактору для честного показа состояния.
+	"gooby_mode", "gooby_strategy", "gooby_no_disorder", "gooby_config", "gooby_proxy"];
+// [P1-SECRETS] Только флаг наличия секрета, без значения: нужен редактору,
+// чтобы честно показать «сохранено» и не выдавать секрет в обычном ответе.
+const PROFILE_SECRET_NAMES = ["password", "vk", "vk_js_token", "device_id"];
+
+function mProfiles(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { error: INSTANCE_ERR, profiles: [] };
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null)
+		return { error: "uci show " + inst.uci + " недоступен", instance: inst.key, selection_mode: "", active_profile: "", profiles: [] };
+	let out = [];
+	let main = cfg.main;
+	let main_safe = {};
+	if (main != null) {
+		for (let i = 0; i < length(MAIN_PANEL); i++) {
+			let k = MAIN_PANEL[i];
+			if (main[k] != null)
+				main_safe[k] = "" + main[k];
+		}
+	}
+	let schema_num = (main != null && main.schema_version != null)
+		? (int(main.schema_version) || 1) : 1;
+	let main_obfs = (schema_num < 3 && main != null && main.obfs != null && main.obfs != "")
+		? "" + main.obfs : "";
+	for (let id in cfg) {
+		let sec = cfg[id];
+		if (sec == null || sec[".type"] != "server")
+			continue;
+		let p = { id: id };
+		for (let i = 0; i < length(PROFILE_SAFE); i++) {
+			let k = PROFILE_SAFE[i];
+			if (sec[k] != null)
+				p[k] = "" + sec[k];
+		}
+		// Флаги наличия секретов (не значения).
+		for (let i = 0; i < length(PROFILE_SECRET_NAMES); i++) {
+			let k = PROFILE_SECRET_NAMES[i];
+			p["has_" + k] = (sec[k] != null && sec[k] != "");
+		}
+		// Тот же приоритет, что в `ProfilePool::effective_obfs`:
+		// schema>=2 — явный профиль, иначе main; legacy — main, иначе профиль.
+		let profile_obfs = (p.obfs != null && p.obfs != "") ? p.obfs : "";
+		p.obfs_effective = (schema_num >= 3) ? (profile_obfs != "" ? profile_obfs : "audio") : (schema_num >= 2)
+			? (profile_obfs != "" ? profile_obfs : main_obfs)
+			: (main_obfs != "" ? main_obfs : (profile_obfs != "" ? profile_obfs : "audio"));
+		// [P7.2] srtp_mode — отдельная per-profile настройка (не obfs и не
+		// глобальная): пусто = auto, действует только на 2.5.0.
+		let profile_srtp = (p.srtp_mode != null && p.srtp_mode != "") ? "" + p.srtp_mode : "";
+		p.srtp_mode_effective = (profile_srtp != "") ? profile_srtp : "auto";
+		push(out, p);
+	}
+	// [SHARED_SETTINGS] Legacy-детекция для панели: schema_version и СПИСОК имён
+	// общих полей, которые ещё лежат в профилях и отсутствуют в main. Значения
+	// полей (в т.ч. секреты) наружу не передаются — только имена.
+	let schema_version = (main != null && main.schema_version != null) ? "" + main.schema_version : "";
+	let legacy_shared = [];
+	for (let i = 0; i < length(SHARED_FIELDS); i++) {
+		let k = SHARED_FIELDS[i];
+		if (main != null && main[k] != null && main[k] != "")
+			continue;
+		for (let id in cfg) {
+			let sec = cfg[id];
+			if (sec == null || sec[".type"] != "server")
+				continue;
+			if (sec[k] != null && sec[k] != "") {
+				push(legacy_shared, k);
+				break;
+			}
+		}
+	}
+	// [D4] Единый источник ФАКТИЧЕСКИ активного профиля — status.json от ядра
+	// (`active_profile`, как в `csqtt.status`), а НЕ UCI `main.active_profile`.
+	// UCI хранит ВЫБРАННЫЙ в настройках профиль и в режиме priority/auto пуст:
+	// из-за этого `csqtt.profiles` отдавал `active_profile: ""`, пока служба
+	// реально работала на профиле (живой дефект 2026-10-15). Различаем:
+	// `active_profile`/`running_profile` — работает сейчас; `configured_profile`
+	// — выбран в настройках (может быть пустым в auto-режиме).
+	if (schema_num >= 3) legacy_shared = [];
+	let st = readStatusJson(inst);
+	let running = (st != null && st.daemon_state != "stopped" && st.active_profile != null) ? "" + st.active_profile : "";
+	let configured = (main != null && main.active_profile != null) ? "" + main.active_profile : "";
+	return {
+		instance: inst.key,
+		ifname: inst.ifname,
+		selection_mode: (main != null && main.selection_mode != null ? "" + main.selection_mode : ""),
+		active_profile: (running != "" ? running : configured),
+		running_profile: running,
+		configured_profile: configured,
+		schema_version: schema_version,
+		legacy_shared: legacy_shared,
+		// [056/PROFILE-1] Только флаг: первый профиль на старой схеме получает
+		// сохранённый токен из main, поэтому редактору нужно знать, что он есть,
+		// не раскрывая значение.
+		main_has_vk_js_token: (main != null && main.vk_js_token != null && main.vk_js_token != ""),
+		main: main_safe,
+		profiles: out,
+	};
+}
+
+function mProfileAction(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let action = req.args.action;
+	let id = req.args.id;
+	let allowed = false;
+	for (let i = 0; i < length(PROFILE_ACTIONS); i++)
+		if (PROFILE_ACTIONS[i] == action)
+			allowed = true;
+	if (!allowed)
+		return { ok: false, error: "action: use|auto|enable|disable|remove" };
+	let argv = [BIN, "profile", action];
+	if (action != "auto") {
+		if (!isProfileId(id))
+			return { ok: false, error: "некорректный id профиля (только [A-Za-z0-9_])" };
+		push(argv, id);
+	}
+	push(argv, "--config"); push(argv, inst.config);
+	let r = run(argv, EXEC_TMO);
+	if (r.code != 0)
+		return { ok: false, instance: inst.key, code: r.code, output: strip(r.out) };
+	// [STAGE-10] `profile use|auto|enable|disable|remove` меняют конфиг через
+	// бинарник и сами демон не перезагружают. Без reload изменение оставалось
+	// только на диске: панель показывала новый режим/активный профиль, а
+	// работающий демон продолжал прежний выбор (кнопка «Подключить» не
+	// подключала, «Приоритет» откатывался при ближайшем reload). SIGHUP —
+	// плавное применение выбора без разрыва, как обещает подсказка кнопки.
+	//
+	// [015] Если служба остановлена, reload бессмысленен и раньше выглядел
+	// ошибкой: `init reload` → exit 1 → `applied:false` → панель показывала
+	// «выбор сохранён, но применить не удалось». Это не отказ: конфиг уже
+	// сохранён на диск и применится при следующем запуске. `init status`
+	// возвращает 2, когда служба CSQTT не запущена (0 — подключена, 1 —
+	// запущена, но туннель ещё не подключён). При 2 не дёргаем reload и
+	// сообщаем нейтральное `applied:null`.
+	let st = run([inst.init, "status"], EXEC_TMO);
+	if (st.code == 2)
+		return { ok: true, instance: inst.key, code: r.code, output: strip(r.out),
+			applied: null };
+	let rl = run([inst.init, "reload"], EXEC_TMO);
+	return { ok: true, instance: inst.key, code: r.code, output: strip(r.out),
+		applied: rl.code == 0 };
+}
+
+// Понятная причина отказа без текста ссылки, имён секретов и содержимого
+// конфигурации. Разбор — по устойчивым фразам CLI.
+function importErrorText(out) {
+	let s = (out != null) ? "" + out : "";
+	if (index(s, "уже занято") >= 0)
+		return "Профиль с таким ID уже существует. Укажите другой ID.";
+	if (index(s, "версия ядра") >= 0)
+		return "В ссылке не указана версия ядра: импортируйте без активации и выберите 2.1.9 или 2.5.3 в редакторе профиля.";
+	if (index(s, "невалиден") >= 0)
+		return "Данные ссылки не прошли проверку конфигурации. Исходная конфигурация не изменена.";
+	if (index(s, "ошибка записи") >= 0)
+		return "Не удалось записать конфигурацию. Исходные данные не изменены.";
+	if (index(s, "импортируется") >= 0)
+		return "Ссылка не распознана. Проверьте формат csqtt://… и повторите импорт.";
+	return "Не удалось импортировать ссылку. Исходная конфигурация не изменена.";
+}
+
+// [FIX-EXPORT] CLI пишет на stderr предупреждение «ссылка содержит пароль…», а
+// run() намеренно склеивает stdout+stderr (для видимых ошибок). Поэтому из
+// вывода берём ТОЛЬКО строку-ссылку: иначе в панель попадёт «внимание…\ncsqtt://…»
+// и импорт этой же ссылки отвергнет её (round-trip export→import ломался).
+function firstLinkLine(s) {
+	let lines = split(replace(s, TRAIL_NL, ""), "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let ln = trim(lines[i]);
+		if (substr(ln, 0, 8) == "csqtt://")
+			return ln;
+	}
+	return "";
+}
+
+// Экспорт возвращает csqtt://-ссылку с секретом — только write-ACL, LuCI
+// не должен показывать её без явного действия пользователя.
+function mProfileExport(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (!isProfileId(req.args.id))
+		return { ok: false, error: "некорректный id профиля" };
+	let r = run([BIN, "profile", "export", req.args.id, "--config", inst.config], EXEC_TMO);
+	if (r.code != 0)
+		return { ok: false, instance: inst.key, code: r.code, error: strip(r.out) };
+	let link = firstLinkLine(r.out);
+	if (link == "")
+		return { ok: false, instance: inst.key, code: r.code,
+			error: (strip(r.out) != "" ? strip(r.out) : "пустой ответ экспорта") };
+	return { ok: true, instance: inst.key, link: link };
+}
+
+// [r31] Локальная расшифровка зашифрованной ссылки 2.5.0 для панели по HTTP
+// (WebCrypto доступен только в secure context). Ссылка приходит ubus-аргументом,
+// не в URL, и не логируется: RPC возвращает результат только вызывающему.
+// Расшифровка — проверенной Rust-криптографией, ключ тот же, что у клиента.
+// Метод относится к write-ACL: импорт профиля и так требует прав записи.
+function mLinkDecrypt(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let link = req.args.link;
+	if (type(link) != "string" || substr(link, 0, 8) != "csqtt://")
+		return { ok: false, error: "link должен быть csqtt://…" };
+	if (length(link) > 4096)
+		return { ok: false, error: "ссылка слишком длинная" };
+	let r = run([BIN, "link-decrypt", link], EXEC_TMO);
+	if (r.code != 0)
+		return { ok: false, instance: inst.key, code: r.code,
+			error: (strip(r.out) != "" ? strip(r.out) : "не удалось расшифровать ссылку") };
+	let plain = firstLinkLine(r.out);
+	if (plain == "")
+		return { ok: false, instance: inst.key, code: r.code,
+			error: "расшифровка не дала ссылку connect?…" };
+	return { ok: true, instance: inst.key, link: plain };
+}
+
+// [062/D1] Фактический Device ID старого протокола и источник значения.
+// Порядок повторяет `effective_shared`/`client_config_for` ядра:
+//   schema_version >= 3 — только поле профиля;
+//   schema_version == 2 — только `main.device_id`;
+//   schema_version < 2  — main, затем непустое поле профиля (legacy).
+// Пустое эффективное значение заменяется fallback `openwrt` только у
+// подтверждённых старых протоколов (2.1.9/2.5.0). Для `auto`/неизвестного
+// ядра источник неизвестен: панель не выдумывает fallback.
+function deviceIdSource(inst, id, core) {
+	if (core == "2.5.3")
+		return { value: "", source: "not-used" };
+	if (core != "2.1.9" && core != "2.5.0")
+		return { value: "", source: "unknown" };
+	let get = function(key) {
+		let r = run([UCIBIN, "-q", "get", inst.uci + "." + key], EXEC_TMO);
+		return (r.code == 0) ? strip(r.out) : "";
+	};
+	let profileValue = get(id + ".device_id");
+	let globalValue = get("main.device_id");
+	let schema = int(get("main.schema_version") || "0");
+	if (schema >= 3) {
+		if (profileValue != "")
+			return { value: profileValue, source: "profile" };
+	} else if (schema == 2) {
+		if (globalValue != "")
+			return { value: globalValue, source: "global" };
+	} else {
+		if (globalValue != "")
+			return { value: globalValue, source: "global" };
+		if (profileValue != "")
+			return { value: profileValue, source: "profile" };
+	}
+	// Fallback подтверждён для протокола 2.1.9/2.5.0. Точная ревизия движка
+	// должна быть проверена отдельно; панель не выдаёт это за серверную привязку.
+	return { value: "openwrt", source: "default" };
+}
+
+// [SECRET-VIEW] Просмотр сохранённого секрета выбранного профиля — ТОЛЬКО по
+// явному действию администратора (write-ACL, как profile_export). Секрет не
+// входит в profiles()/status()/логи/отчёты: значение возвращается ровно этому
+// вызову и нигде не логируется. Пустое значение = «не сохранено» (present:false).
+// device_id запрашивается только там, где протокол его использует (не 2.5.0).
+function mProfileSecret(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (!isProfileId(req.args.id))
+		return { ok: false, error: "некорректный id профиля" };
+	let field = req.args.field;
+	let allowed = false;
+	for (let i = 0; i < 4; i++)
+		if (field == ["password", "vk", "vk_js_token", "device_id"][i])
+			allowed = true;
+	if (!allowed)
+		return { ok: false, error: "поле не является секретом профиля" };
+	// [ADAPTIVE-FORM] Явный core 2.5.3: device_id протоколом не используется —
+	// отказ вместо показа значения, которое никогда не применяется.
+	// [058/A3] У 2.1.9 и у миграционного 2.5.0 device_id — действующий секрет
+	// старого протокола: он разрешён (раньше 2.5.0 ошибочно блокировался).
+	// [062/D1] Для старого протокола возвращаем и фактический ID с источником:
+	// сохранённое поле профиля может быть пустым, а ядро при этом использует
+	// общий main.device_id или fallback `openwrt`. Панель не должна показывать
+	// пустое поле как действующее значение.
+	if (field == "device_id") {
+		let cr = run([UCIBIN, "get", inst.uci + "." + req.args.id + ".core_version"], EXEC_TMO);
+		let core = (cr.code == 0) ? strip(cr.out) : "";
+		if (core == "2.5.3")
+			return { ok: false, error: "device_id не используется протоколом 2.5.3" };
+		let eff = deviceIdSource(inst, req.args.id, core);
+		let r = run([UCIBIN, "-q", "get", inst.uci + "." + req.args.id + ".device_id"], EXEC_TMO);
+		let value = (r.code == 0) ? strip(r.out) : "";
+		return {
+			ok: true, instance: inst.key, id: req.args.id, field: field,
+			present: value != "", value: value,
+			effective: eff.value, effective_source: eff.source,
+		};
+	}
+	// uci -q get: код 1 при отсутствии опции/секции — это «не сохранено».
+	let r = run([UCIBIN, "-q", "get", inst.uci + "." + req.args.id + "." + field], EXEC_TMO);
+	let value = (r.code == 0) ? strip(r.out) : "";
+	return {
+		ok: true, instance: inst.key, id: req.args.id, field: field,
+		present: value != "", value: value,
+	};
+}
+
+function uciApplyOne(inst, section, option, value) {
+	let r = run([UCIBIN, "set", inst.uci + "." + section + "." + option + "=" + value], EXEC_TMO);
+	return r.code == 0;
+}
+
+// Откат незакоммиченных изменений только своего пакета: частичная запись не
+// должна попасть в следующий commit другой операции.
+function uciRevert(inst) {
+	run([UCIBIN, "-q", "revert", inst.uci], EXEC_TMO);
+}
+
+// [056/PROFILE-1] Первый профиль на старой схеме (schema_version < 3).
+// Раньше панель требовала сначала перенести общие настройки в профиль, а
+// перенос отказывался работать без профиля — замкнутый круг. Теперь перенос
+// выполняется в одной транзакции с созданием/импортом первого профиля:
+//   * общие поля main копируются в профиль (секреты — без вывода наружу);
+//   * main переводится на schema_version=3;
+//   * перенесённые поля из main удаляются, чтобы не осталось наследования;
+//   * до первой записи создаётся резервная копия конфига (0600).
+// Для существующих профилей остаётся прежний migrate-profile-settings.sh.
+const FIRST_PROFILE_TUN = ["tun_address", "tun_mtu", "dns"];
+// [056/PROFILE-1] Секреты среди переносимых полей. Пустой секрет в редакторе —
+// не очистка, а «оставить действующее значение» (тот же контракт, что у
+// PROFILE_WRITE_SECRET). Без этого различия перенос удалял значение из main,
+// не записав его в профиль: подтверждённая потеря vk_js_token/device_id.
+// `password` в main не хранится и в SHARED_FIELDS не входит — не переносится.
+const FIRST_PROFILE_SECRET = ["vk", "vk_js_token", "device_id"];
+
+function firstProfileIsSecret(k) {
+	for (let i = 0; i < length(FIRST_PROFILE_SECRET); i++)
+		if (FIRST_PROFILE_SECRET[i] == k)
+			return true;
+	return false;
+}
+
+function serverSectionCount(cfg) {
+	let n = 0;
+	for (let id in cfg)
+		if (cfg[id] != null && cfg[id][".type"] == "server")
+			n++;
+	return n;
+}
+
+function schemaNumberOf(cfg) {
+	let m = (cfg != null) ? cfg.main : null;
+	return (m != null && m.schema_version != null) ? (int(m.schema_version) || 1) : 1;
+}
+
+// Имя фиксированное и не совпадает с ротацией импорта `csqtt.<n>.bak`.
+// Ошибка копии блокирует запись: без копии нельзя обещать сохранность данных.
+function backupBeforeFirstProfile(inst) {
+	let dir = inst.backupDir;
+	if (dir == null || dir == "")
+		return false;
+	if (run(["mkdir", "-p", dir], EXEC_TMO).code != 0)
+		return false;
+	let dst = dir + "/csqtt.pre-first-profile.bak";
+	if (run(["cp", "-f", inst.config, dst], EXEC_TMO).code != 0)
+		return false;
+	run(["chmod", "600", dst], EXEC_TMO);
+	return true;
+}
+
+// Возврат к копии «до импорта»: замена через соседний temp + rename, чтобы
+// live-конфиг не оказался частично записанным.
+function restoreFirstProfileBackup(inst) {
+	let dir = inst.backupDir;
+	if (dir == null || dir == "")
+		return false;
+	let src = dir + "/csqtt.pre-first-profile.bak";
+	let tmp = inst.config + ".restore";
+	if (run(["cp", "-f", src, tmp], EXEC_TMO).code != 0)
+		return false;
+	run(["chmod", "600", tmp], EXEC_TMO);
+	return run(["mv", "-f", tmp, inst.config], EXEC_TMO).code == 0;
+}
+
+function firstProfileSharedFields() {
+	let list = [];
+	for (let i = 0; i < length(SHARED_FIELDS); i++)
+		push(list, SHARED_FIELDS[i]);
+	// obfs — осознанное per-profile исключение: после схемы 3 наследование из
+	// main отсутствует, поэтому действующее значение должно попасть в профиль.
+	push(list, "obfs");
+	for (let i = 0; i < length(FIRST_PROFILE_TUN); i++)
+		push(list, FIRST_PROFILE_TUN[i]);
+	return list;
+}
+
+// Только staging в общем UCI-пакете; commit делает вызывающий, поэтому
+// создание профиля и переход схемы применяются вместе или не применяются вовсе.
+// data == null (импорт): собственные значения уже записанного профиля важнее
+// main; main заполняет только отсутствующее/пустое. data != null (редактор):
+// непустое значение — явный выбор, он важнее и профиля, и main. Явно пустое
+// НЕСЕКРЕТНОЕ поле означает намеренную очистку и тоже не перезаписывается;
+// явно пустой секрет — «оставить сохранённое значение», поэтому для него
+// действует обычный порядок: профиль (если уже есть) → main.
+function stageFirstProfileMigration(inst, cfg, id, data) {
+	let main = cfg.main, sec = cfg[id];
+	let fields = firstProfileSharedFields();
+	for (let i = 0; i < length(fields); i++) {
+		let k = fields[i];
+		if (data != null && data[k] != null) {
+			// Пустой секрет не считается явным значением: его записал бы
+			// основной writer, а он пустые секреты не пишет.
+			if (!(firstProfileIsSecret(k) && ("" + data[k]) == ""))
+				continue;
+		}
+		if (sec != null && sec[k] != null && ("" + sec[k]) != "")
+			continue;
+		let v = (main != null && main[k] != null) ? "" + main[k] : "";
+		if (v == "")
+			continue;
+		if (!uciApplyOne(inst, id, k, v))
+			return { ok: false, error: "не удалось перенести общие настройки в первый профиль; изменения не применены" };
+	}
+	if (main != null && !uciApplyOne(inst, "main", "schema_version", "3"))
+		return { ok: false, error: "не удалось перевести конфигурацию на схему 3; изменения не применены" };
+	let deleted = [];
+	if (main != null) {
+		for (let i = 0; i < length(fields); i++) {
+			let k = fields[i];
+			if (main[k] == null)
+				continue;
+			run([UCIBIN, "-q", "delete", inst.uci + ".main." + k], EXEC_TMO);
+			push(deleted, k);
+		}
+	}
+	// Проверка до commit: перенесённые поля не должны остаться в main.
+	if (length(deleted) > 0) {
+		let after = uciShowPkg(inst.uci);
+		if (after == null)
+			return { ok: false, error: "не удалось проверить перенос общих настроек; изменения не применены" };
+		let m2 = after.main;
+		for (let i = 0; i < length(deleted); i++)
+			if (m2 != null && m2[deleted[i]] != null)
+				return { ok: false, error: "не удалось убрать перенесённые настройки из общих; изменения не применены" };
+	}
+	return { ok: true };
+}
+
+// [P1-SECRETS] Запись профиля через RPC вместо клиентского uci.set.
+// Причина: read-ACL на весь пакет `csqtt` отдавал секреты любому, кто мог
+// открыть UCI API, независимо от write-ACL `profile_secret`. Теперь панель
+// читает только safe-поля через profiles/status, а пишет этим методом.
+// Секретные поля с пустым значением НЕ записываются (пусто = «не трогать»).
+const PROFILE_WRITE_ALWAYS = ["name", "enabled", "priority", "peer", "note",
+	"core_version", "workers", "vk_hash_mode", "turn_transport", "captcha_mode",
+	"fingerprint", "client_ids", "tun_address", "tun_mtu", "dns", "obfs",
+	"srtp_mode", "turn_subnet", "turn_subnet_ip_limit",
+	// [049] Gooby (per-profile, только 2.5.3). Пишутся явно (в т.ч. пустыми,
+	// чтобы выключение режима давало каноническую валидную конфигурацию).
+	"gooby_mode", "gooby_strategy", "gooby_no_disorder", "gooby_config", "gooby_proxy"];
+const PROFILE_WRITE_KEEP = ["fail_threshold", "success_threshold", "cooldown",
+	"captcha_policy"];
+const PROFILE_WRITE_SECRET = ["password", "vk", "vk_js_token", "device_id"];
+const SETTINGS_WRITE = ["enabled", "selection_mode", "active_profile", "failover",
+	"failback", "health_interval", "fail_threshold", "success_threshold", "cooldown",
+	"reconnect_delay", "failback_stable_time", "health_mode", "health_target",
+	"log_level", "log_file", "log_size_kb"];
+const SETTINGS_ENUM = {
+	selection_mode: ["priority", "manual"],
+	health_mode: ["transport", "data", "both"],
+	log_level: ["error", "warn", "info", "debug"],
+};
+const SETTINGS_NUM = ["health_interval", "fail_threshold", "success_threshold",
+	"cooldown", "reconnect_delay", "failback_stable_time", "log_size_kb"];
+
+function inList(list, value) {
+	for (let i = 0; i < length(list); i++)
+		if (list[i] == value)
+			return true;
+	return false;
+}
+
+function hasNewline(s) {
+	return (index(s, "\n") >= 0 || index(s, "\r") >= 0);
+}
+
+// [P3] Резервная копия live-конфига перед первым явным выбором ядра для
+// профиля, который раньше оставался `auto`. Имя фиксировано (без пользовательских
+// данных); содержимое — обычный конфиг, доступ только root. Ошибка backup не
+// блокирует сохранение: это защитная копия, а не транзакция.
+function backupBeforeCoreChoice(inst) {
+	let dir = inst.backupDir;
+	if (dir == null || dir == "")
+		return;
+	if (run(["mkdir", "-p", dir], EXEC_TMO).code != 0)
+		return;
+	let dst = dir + "/csqtt.pre-core-choice.bak";
+	if (run(["cp", "-f", inst.config, dst], EXEC_TMO).code != 0)
+		return;
+	run(["chmod", "600", dst], EXEC_TMO);
+}
+
+// [049] Gooby: внешний прокси принимается только как numeric loopback IP:port
+// с ненулевым портом — зеркало `gooby::GoobyProxy::from_str` (SocketAddr-разбор
+// + `ip().is_loopback()` + `port() != 0`). DNS-имена/wildcard/remote отклоняются.
+// `is_loopback()` в Rust для IPv4 — вся 127.0.0.0/8, для IPv6 — только `::1`.
+function goobyProxyValid(v) {
+	if (type(v) != "string")
+		return false;
+	let m = match(v, regexp("^\\[([0-9A-Fa-f:]+)\\]:([0-9]+)$"));
+	if (m != null) {
+		if (m[1] != "::1")
+			return false;
+		let p6 = int(m[2]);
+		return p6 >= 1 && p6 <= 65535;
+	}
+	m = match(v, regexp("^([0-9]+)\\.([0-9]+)\\.([0-9]+)\\.([0-9]+):([0-9]+)$"));
+	if (m == null)
+		return false;
+	let a = int(m[1]), b = int(m[2]), c = int(m[3]), d = int(m[4]), port = int(m[5]);
+	if (a > 255 || b > 255 || c > 255 || d > 255)
+		return false;
+	if (a != 127)
+		return false;
+	return port >= 1 && port <= 65535;
+}
+
+// Валидация строки профиля до записи. Возвращает текст ошибки или null.
+function profileValueError(k, v) {
+	if (hasNewline(v))
+		return k + ": перевод строки недопустим";
+	if (k == "name" && length(v) > 64)
+		return "name слишком длинное";
+	if ((k == "peer" || k == "dns" || k == "tun_address") && length(v) > 255)
+		return k + " слишком длинное";
+	if (k == "note" && length(v) > 512)
+		return "note слишком длинное";
+	if (k == "client_ids" && length(v) > 512)
+		return "client_ids слишком длинные";
+	if (k == "obfs" && !inList(["", "audio", "video", "unified"], v))
+		return "obfs: audio|video|unified|пусто";
+	if (k == "srtp_mode" && !inList(["auto", "wrap", "dtls"], v))
+		return "srtp_mode: auto|wrap|dtls";
+	if (k == "turn_transport" && !inList(["udp", "tcp_tls"], v))
+		return "turn_transport: udp|tcp_tls";
+	if (k == "captcha_mode" && !inList(["auto", "wv", "rjs"], v))
+		return "captcha_mode: auto|wv|rjs";
+	if (k == "fingerprint" && !inList(["chrome", "firefox"], v))
+		return "fingerprint: chrome|firefox";
+	if (k == "vk_hash_mode" && !inList(["manual", "auto_js", "auto_api"], v))
+		return "vk_hash_mode: manual|auto_js|auto_api";
+	if (k == "turn_subnet" && v != "" && match(v, regexp("^[A-Za-z0-9_]+$")) == null)
+		return "turn_subnet: недопустимые символы";
+	if (k == "turn_subnet_ip_limit" && v != "" && match(v, regexp("^([Aa][Ll][Ll]|[0-9]+)$")) == null)
+		return "turn_subnet_ip_limit: ALL или число";
+	if (k == "core_version" && !inList(["2.1.9", "2.5.3", "2.5.0"], v))
+		return "core_version: выберите 2.1.9, 2.5.0 или 2.5.3 (auto не поддерживается)";
+	if (k == "workers" && v != "" && match(v, regexp("^[0-9]+$")) == null)
+		return "workers: число";
+	if (k == "priority" && v != "" && match(v, regexp("^[0-9]+$")) == null)
+		return "priority: число";
+	if (k == "enabled" && !inList(["0", "1"], v))
+		return "enabled: 0|1";
+	// [049] Gooby — зеркало `GoobySettings::resolve`. Форматные проверки
+	// действуют и для выключенного черновика: невалидное значение не «оживёт».
+	if (k == "gooby_mode" && !inList(["", "disabled", "embedded", "external"], v))
+		return "gooby_mode: disabled|embedded|external";
+	if (k == "gooby_strategy" && !inList(["", "current", "gentle", "extended"], v))
+		return "gooby_strategy: current|gentle|extended";
+	if (k == "gooby_no_disorder" && !inList(["0", "1", "true", "false"], v))
+		return "gooby_no_disorder: 0|1";
+	if (k == "gooby_config" && v != "" && substr(v, 0, 1) != "/")
+		return "gooby_config: ожидается абсолютный путь к ZIP-файлу";
+	if (k == "gooby_proxy" && v != "" && !goobyProxyValid(v))
+		return "gooby_proxy: ожидается numeric loopback IP:port с ненулевым портом";
+	return null;
+}
+
+// [049] Эффективный turn_transport для гейта «UDP+Gooby». Зеркало
+// `ProfilePool::effective_shared`: schema>=3 — только профиль; schema 2 —
+// main; legacy — main, иначе непустой профиль; дефолт udp.
+function goobyEffectiveTransport(profileTT, mainTT, schemaNum) {
+	if (schemaNum >= 3)
+		return (profileTT != "") ? profileTT : "udp";
+	if (mainTT != null && mainTT != "")
+		return "" + mainTT;
+	if (schemaNum < 2 && profileTT != "")
+		return profileTT;
+	return "udp";
+}
+
+// [049] Кросс-полевая проверка Gooby-комбинации — зеркало
+// `GoobySettings::resolve`. Форматные проверки отдельных полей уже сделаны
+// `profileValueError`; здесь взаимоисключения и гейты ядра/транспорта.
+// `m` — слитые значения профиля (новые поверх сохранённых). Возвращает текст
+// ошибки или null. Взаимоисключения действуют и для выключенного черновика
+// (как vk-режимы); гейт ядра и UDP — только для включённого профиля.
+function goobyCombinationError(m) {
+	let mode = (m.mode == "disabled") ? "" : m.mode;
+	let embedded = mode == "embedded";
+	let external = mode == "external";
+	let strategySet = m.strategy != "";
+	let configSet = m.config != "";
+	let proxySet = m.proxy != "";
+	let disorderSet = (m.no_disorder == "1" || m.no_disorder == "true");
+	if (embedded && proxySet)
+		return "gooby_mode=embedded и gooby_proxy взаимоисключающие";
+	if (!embedded) {
+		if (strategySet)
+			return "gooby_strategy требует gooby_mode=embedded";
+		if (configSet)
+			return "gooby_config требует gooby_mode=embedded";
+		if (disorderSet)
+			return "gooby_no_disorder требует gooby_mode=embedded";
+	}
+	if (!external && proxySet)
+		return "gooby_proxy требует gooby_mode=external";
+	if (configSet && strategySet)
+		return "gooby_config несовместим с gooby_strategy (задайте что-то одно)";
+	if (external && !proxySet)
+		return "gooby_mode=external требует gooby_proxy (loopback IP:port)";
+	if ((embedded || external) && m.enabled == "1") {
+		if (!inList(["2.5.3", "2.5.0"], m.core))
+			return "Gooby поддерживается только ядром 2.5.3; задайте core_version=2.5.3";
+		if (m.turn_transport == "udp")
+			return "Gooby требует TURN TCP/TLS; задайте turn_transport=tcp_tls";
+	}
+	return null;
+}
+
+function mProfileSave(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let id = req.args.id;
+	if (!isProfileId(id) || id == "main" || id == "routing")
+		return { ok: false, error: "некорректный id профиля (только [A-Za-z0-9_])" };
+	let raw = req.args.data;
+	if (type(raw) != "string" || length(raw) > 65536)
+		return { ok: false, error: "data: ожидается JSON-объект" };
+	let data = parseJson(raw);
+	if (type(data) != "object" || data == null)
+		return { ok: false, error: "data: некорректный JSON" };
+	// [058/A2] Нельзя записать ядро 2.5.3, если его файла нет: старое ядро
+	// 2.1.9/2.5.0 такой конфиг целиком отвергнет как невалидный. Проверяем до
+	// любых записей в UCI (в т.ч. до создания секции), ничего не меняя.
+	if (data["core_version"] != null && ("" + data["core_version"]) == "2.5.3"
+		&& !fileInstalled(CORE253))
+		return { ok: false, error: "core_version: ядро 2.5.3 не установлено; выберите 2.1.9 или 2.5.0" };
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null)
+		return { ok: false, error: "uci show " + inst.uci + " недоступен" };
+	let create = (req.args.create == true || req.args.create == "1" || req.args.create == 1);
+	// [056/PROFILE-1] Первый профиль на старой схеме: общие настройки main
+	// переносятся в него в этой же транзакции. Резервная копия — до первой
+	// записи; без неё запись не начинается.
+	let schemaNum = schemaNumberOf(cfg);
+	let firstProfile = create && serverSectionCount(cfg) == 0 && schemaNum < 3;
+	if (create) {
+		if (cfg[id] != null)
+			return { ok: false, error: "профиль уже существует" };
+		if (firstProfile && !backupBeforeFirstProfile(inst))
+			return { ok: false, error: "не удалось создать резервную копию конфигурации; изменения не применены" };
+		let cr = run([UCIBIN, "set", inst.uci + "." + id + "=server"], EXEC_TMO);
+		if (cr.code != 0) {
+			uciRevert(inst);
+			return { ok: false, error: "не удалось создать секцию профиля" };
+		}
+	} else {
+		if (cfg[id] == null || cfg[id][".type"] != "server")
+			return { ok: false, error: "профиль не найден" };
+	}
+
+	let writes = [];
+	for (let i = 0; i < length(PROFILE_WRITE_ALWAYS); i++) {
+		let k = PROFILE_WRITE_ALWAYS[i];
+		if (data[k] == null)
+			continue;
+		let v = "" + data[k];
+		let err = profileValueError(k, v);
+		if (err != null) {
+			uciRevert(inst);
+			return { ok: false, error: err };
+		}
+		// [049] Канонизация Gooby: явный `disabled` → пусто (как в uci.rs);
+		// boolean true/false → 1/0.
+		if (k == "gooby_mode" && v == "disabled")
+			v = "";
+		if (k == "gooby_no_disorder" && (v == "true" || v == "false"))
+			v = (v == "true") ? "1" : "0";
+		push(writes, [k, v]);
+	}
+	// [P3] Новый профиль создаётся только с явной версией ядра: иначе он
+	// оказался бы `auto` и не смог запуститься без понятной причины.
+	if (create && data["core_version"] == null) {
+		uciRevert(inst);
+		return { ok: false, error: "core_version: укажите 2.1.9, 2.5.0 или 2.5.3" };
+	}
+	// Пустое значение сохраняет прежнее (пароль, хеши, токен, device_id,
+	// failover-переопределения) — так же, как раньше в клиенте.
+	for (let i = 0; i < length(PROFILE_WRITE_KEEP); i++) {
+		let k = PROFILE_WRITE_KEEP[i];
+		if (data[k] == null)
+			continue;
+		let v = "" + data[k];
+		if (v == "")
+			continue;
+		if (hasNewline(v) || length(v) > 512) {
+			uciRevert(inst);
+			return { ok: false, error: k + ": недопустимое значение" };
+		}
+		push(writes, [k, v]);
+	}
+	for (let i = 0; i < length(PROFILE_WRITE_SECRET); i++) {
+		let k = PROFILE_WRITE_SECRET[i];
+		if (data[k] == null)
+			continue;
+		let v = "" + data[k];
+		if (v == "") {
+			continue;
+		}
+		if (hasNewline(v) || length(v) > 8192) {
+			uciRevert(inst);
+			return { ok: false, error: k + ": недопустимое значение" };
+		}
+		push(writes, [k, v]);
+	}
+	// [049] Кросс-полевая проверка Gooby до записи: невалидная комбинация не
+	// должна попасть в UCI даже частично. Сливаем новые данные с сохранёнными
+	// (создание — только новые); гейт ядра/UDP — по эффективному transport.
+	let sec = cfg[id];
+	let mergedMode = (data["gooby_mode"] != null) ? ("" + data["gooby_mode"])
+		: ((sec != null && sec.gooby_mode != null) ? "" + sec.gooby_mode : "");
+	let merged = {
+		mode: mergedMode,
+		strategy: (data["gooby_strategy"] != null) ? ("" + data["gooby_strategy"])
+			: ((sec != null && sec.gooby_strategy != null) ? "" + sec.gooby_strategy : ""),
+		no_disorder: (data["gooby_no_disorder"] != null) ? ("" + data["gooby_no_disorder"])
+			: ((sec != null && sec.gooby_no_disorder != null) ? "" + sec.gooby_no_disorder : "0"),
+		config: (data["gooby_config"] != null) ? ("" + data["gooby_config"])
+			: ((sec != null && sec.gooby_config != null) ? "" + sec.gooby_config : ""),
+		proxy: (data["gooby_proxy"] != null) ? ("" + data["gooby_proxy"])
+			: ((sec != null && sec.gooby_proxy != null) ? "" + sec.gooby_proxy : ""),
+		enabled: (data["enabled"] != null) ? ("" + data["enabled"])
+			: ((sec != null && sec.enabled != null) ? "" + sec.enabled : "0"),
+		core: (data["core_version"] != null) ? ("" + data["core_version"])
+			: ((sec != null && sec.core_version != null) ? "" + sec.core_version : ""),
+		turn_transport: "",
+	};
+	if (merged.config != "" && substr(merged.config, 0, 1) != "/") {
+		uciRevert(inst);
+		return { ok: false, error: "gooby_config: ожидается абсолютный путь к ZIP-файлу" };
+	}
+	if (merged.proxy != "" && !goobyProxyValid(merged.proxy)) {
+		uciRevert(inst);
+		return { ok: false, error: "gooby_proxy: ожидается numeric loopback IP:port с ненулевым портом" };
+	}
+	let mainSec = cfg.main;
+	let profileTT = (data["turn_transport"] != null) ? ("" + data["turn_transport"])
+		: ((sec != null && sec.turn_transport != null) ? "" + sec.turn_transport : "");
+	merged.turn_transport = goobyEffectiveTransport(profileTT,
+		(mainSec != null && mainSec.turn_transport != null) ? "" + mainSec.turn_transport : null,
+		schemaNum);
+	let goobyErr = goobyCombinationError(merged);
+	if (goobyErr != null) {
+		uciRevert(inst);
+		return { ok: false, error: goobyErr };
+	}
+	// [P3] Профиль, который раньше был `auto`, при первом явном выборе ядра
+	// получает резервную копию конфига. Автоматической миграции нет: значение
+	// меняется только по действию пользователя.
+	if (!create) {
+		let oldCore = (cfg[id] != null && cfg[id].core_version != null) ? "" + cfg[id].core_version : "";
+		let requestedCore = (data["core_version"] != null) ? "" + data["core_version"] : "";
+		if ((oldCore == "" || oldCore == "auto")
+			&& (requestedCore == "2.1.9" || requestedCore == "2.5.3" || requestedCore == "2.5.0"))
+			backupBeforeCoreChoice(inst);
+	}
+	for (let i = 0; i < length(writes); i++) {
+		if (!uciApplyOne(inst, id, writes[i][0], writes[i][1])) {
+			uciRevert(inst);
+			return { ok: false, error: "uci set " + writes[i][0] + " отклонён" };
+		}
+	}
+	// [056/PROFILE-1] Перенос общих настроек — в той же транзакции, что и
+	// создание профиля: либо применяется всё, либо ничего.
+	if (firstProfile) {
+		let mr = stageFirstProfileMigration(inst, cfg, id, data);
+		if (!mr.ok) {
+			uciRevert(inst);
+			return { ok: false, error: mr.error };
+		}
+	}
+	let cr = run([UCIBIN, "commit", inst.uci], EXEC_TMO);
+	if (cr.code != 0) {
+		uciRevert(inst);
+		return { ok: false, error: "uci commit " + inst.uci + " не выполнен" };
+	}
+	return { ok: true, instance: inst.key, id: id, created: create };
+}
+
+// Обмен приоритетов двух профилей (кнопки ↑/↓) — одна транзакция.
+function mProfilePriority(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let a = req.args.a, b = req.args.b;
+	if (!isProfileId(a) || !isProfileId(b) || a == b)
+		return { ok: false, error: "нужны два разных корректных id" };
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null)
+		return { ok: false, error: "uci show " + inst.uci + " недоступен" };
+	if (cfg[a] == null || cfg[a][".type"] != "server" || cfg[b] == null || cfg[b][".type"] != "server")
+		return { ok: false, error: "профиль не найден" };
+	let pa = (cfg[a].priority != null) ? "" + cfg[a].priority : "0";
+	let pb = (cfg[b].priority != null) ? "" + cfg[b].priority : "0";
+	if (match(pa, regexp("^[0-9]+$")) == null || match(pb, regexp("^[0-9]+$")) == null)
+		return { ok: false, error: "нечисловой priority: обмен небезопасен" };
+	if (!uciApplyOne(inst, a, "priority", pb) || !uciApplyOne(inst, b, "priority", pa)) {
+		uciRevert(inst);
+		return { ok: false, error: "uci set priority отклонён" };
+	}
+	if (run([UCIBIN, "commit", inst.uci], EXEC_TMO).code != 0) {
+		uciRevert(inst);
+		return { ok: false, error: "uci commit не выполнен" };
+	}
+	return { ok: true, instance: inst.key };
+}
+
+// Чтение настроек панелью без read-ACL на весь UCI-пакет: только safe-поля
+// main, режим routing и список профилей без секретов.
+function mSettings(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null)
+		return { ok: false, error: "uci show " + inst.uci + " недоступен" };
+	let main = {};
+	if (cfg.main != null) {
+		for (let i = 0; i < length(MAIN_PANEL); i++) {
+			let k = MAIN_PANEL[i];
+			if (cfg.main[k] != null)
+				main[k] = "" + cfg.main[k];
+		}
+	}
+	let profiles = [];
+	for (let id in cfg) {
+		let sec = cfg[id];
+		if (sec == null || sec[".type"] != "server")
+			continue;
+		push(profiles, {
+			id: id,
+			name: (sec.name != null && sec.name != "") ? "" + sec.name : id,
+			enabled: (sec.enabled != null ? "" + sec.enabled : "0"),
+			peer: (sec.peer != null ? "" + sec.peer : ""),
+		});
+	}
+	return {
+		ok: true, instance: inst.key,
+		main: main,
+		routing_mode: (cfg.routing != null && cfg.routing.mode != null) ? "" + cfg.routing.mode : "auto",
+		profiles: profiles,
+	};
+}
+
+function settingsValueError(k, v, cfg) {
+	if (hasNewline(v))
+		return k + ": перевод строки недопустим";
+	if (SETTINGS_ENUM[k] != null && !inList(SETTINGS_ENUM[k], v))
+		return k + ": недопустимое значение";
+	if (k == "enabled" || k == "failover" || k == "failback") {
+		if (!inList(["0", "1"], v))
+			return k + ": 0|1";
+	}
+	if (inList(SETTINGS_NUM, k)) {
+		if (match(v, regexp("^[0-9]+$")) == null)
+			return k + ": число";
+		let n = int(v);
+		if (k == "log_size_kb") {
+			if (n < 16 || n > 65536)
+				return "log_size_kb: 16..65536";
+		} else if (n < 0 || n > 86400) {
+			return k + ": 0..86400";
+		}
+	}
+	if (k == "health_target" && length(v) > 255)
+		return "health_target слишком длинный";
+	if (k == "log_file") {
+		if (length(v) > 255 || match(v, regexp("^/[A-Za-z0-9_./-]+$")) == null)
+			return "log_file: абсолютный путь без спецсимволов";
+	}
+	if (k == "active_profile" && v != "") {
+		if (!isProfileId(v) || cfg[v] == null || cfg[v][".type"] != "server")
+			return "active_profile: профиль не найден";
+	}
+	return null;
+}
+
+function mSettingsSave(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let raw = req.args.data;
+	if (type(raw) != "string" || length(raw) > 65536)
+		return { ok: false, error: "data: ожидается JSON-объект" };
+	let data = parseJson(raw);
+	if (type(data) != "object" || data == null)
+		return { ok: false, error: "data: некорректный JSON" };
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null)
+		return { ok: false, error: "uci show " + inst.uci + " недоступен" };
+	let writes = [];
+	for (let i = 0; i < length(SETTINGS_WRITE); i++) {
+		let k = SETTINGS_WRITE[i];
+		if (data[k] == null)
+			continue;
+		let v = "" + data[k];
+		let err = settingsValueError(k, v, cfg);
+		if (err != null)
+			return { ok: false, error: err };
+		push(writes, [k, v]);
+	}
+	for (let i = 0; i < length(writes); i++) {
+		if (!uciApplyOne(inst, "main", writes[i][0], writes[i][1])) {
+			uciRevert(inst);
+			return { ok: false, error: "uci set " + writes[i][0] + " отклонён" };
+		}
+	}
+	if (run([UCIBIN, "commit", inst.uci], EXEC_TMO).code != 0) {
+		uciRevert(inst);
+		return { ok: false, error: "uci commit " + inst.uci + " не выполнен" };
+	}
+	return { ok: true, instance: inst.key };
+}
+
+// [STAGE-8-FIXES] Валидация VK-хешей: `csqtt --validate-vk-hashes`.
+// Хеши — секрет, поэтому НЕ передаём их в argv: пишем во временный файл 0600 и
+// передаём CLI путь, затем удаляем файл. Наружу отдаём только номер («Хеш №N»),
+// статус и код — без значения хеша и его фрагментов.
+//
+// Что подтверждает результат: `valid` = ссылка распознана и анонимные учётные
+// данные получены (это НЕ подтверждение передачи трафика через туннель);
+// `captcha` = VK требует CAPTCHA (не «недействительный хеш»); `invalid` =
+// фатальная ошибка ссылки; `unavailable` = сеть/сервис, результат неизвестен.
+let __hashFileSeq = 0;
+
+// [STAGE-8-FIXES-2] Временный файл с секретом создаётся атомарно и только 0600:
+//   - fs.open("wx") = O_CREAT|O_EXCL: существующий файл ИЛИ symlink по этому
+//     пути не открывается и не перезаписывается (open возвращает null) — нет
+//     подмены через symlink и нет гонки «проверил → создал»;
+//   - третий аргумент 384 (0600) задаёт права уже в момент создания (ucode
+//     вызывает open(2) с perm; umask не может понизить 0600);
+//   - имя = time() + монотонный счётчик; при редком EEXIST берётся следующее
+//     имя (до 8 попыток) — коллизии между проверками исключены, даже в /tmp.
+function openHashTemp() {
+	for (let i = 0; i < 8; i++) {
+		__hashFileSeq++;
+		let path = "/tmp/.csqtt-vkhash-" + time() + "-" + __hashFileSeq + ".tmp";
+		let f = fs.open(path, "wx", 384);
+		if (f != null)
+			return { path: path, file: f };
+	}
+	return null;
+}
+
+// Закрыть дескриптор и удалить файл (идемпотентно). Вызывается на всех путях:
+// успех, ошибка записи/exec и таймаут (timeout — обычный код возврата run()).
+function removeHashTemp(tmp, f) {
+	if (f != null) {
+		try { f.close(); } catch (e) {}
+	}
+	if (tmp != null) {
+		try { fs.unlink(tmp); } catch (e) {}
+	}
+}
+
+// [STAGE-8-FIXES-2] Не более одной проверки одновременно (кнопка блокируется
+// и в UI). Секрет не остаётся на диске ни при одном исходе.
+let __hashBusy = false;
+
+function mHashesValidate(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (__hashBusy)
+		return { ok: false, error: "проверка хешей уже выполняется" };
+	let a = req.args;
+	let vk = (type(a.vk) == "string") ? strip(a.vk) : "";
+	if (vk == "") {
+		if (!isProfileId(a.id))
+			return { ok: false, error: "нужен vk или корректный id профиля" };
+		let ur = run([UCIBIN, "get", inst.uci + "." + a.id + ".vk"], EXEC_TMO);
+		if (ur.code != 0)
+			return { ok: false, error: "не удалось прочитать vk профиля" };
+		vk = strip(ur.out);
+	}
+	if (vk == "")
+		return { ok: true, total: 0, valid: 0, captcha: 0, invalid: 0, unavailable: 0, hashes: [] };
+	if (length(vk) > 8192)
+		return { ok: false, error: "vk слишком длинный" };
+	// [054] Проверку выполняет штатный бинарник 2.5.3. Без него нельзя
+	// вернуть ok:true/total:0 — это выглядело бы как «хеши проверены».
+	if (!fileInstalled(BIN))
+		return { ok: false, error: binMissingError(), code: 127 };
+	__hashBusy = true;
+	let tmp = null, fh = null, r = null;
+	try {
+		let opened = openHashTemp();
+		if (opened == null) {
+			__hashBusy = false;
+			return { ok: false, error: "не удалось создать временный файл" };
+		}
+		tmp = opened.path;
+		fh = opened.file;
+		fh.write(vk);
+		fh.close();
+		fh = null;
+		r = run([BIN, "--validate-vk-hashes", "--vk-file", tmp], HASH_TMO);
+	} catch (e) {
+		removeHashTemp(tmp, fh);
+		__hashBusy = false;
+		return { ok: false, error: "ошибка проверки хешей" };
+	}
+	removeHashTemp(tmp, fh);
+	__hashBusy = false;
+	if (r == null)
+		return { ok: false, error: "не удалось выполнить проверку" };
+	let hashes = [], valid = 0, captcha = 0, invalid = 0, unavailable = 0, idx = 0;
+	let lines = split(replace(r.out, TRAIL_NL, ""), "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let pos = index(lines[i], "HASH_CHECK:");
+		if (pos < 0)
+			continue;
+		let obj = parseJson(substr(lines[i], pos + 11));
+		if (obj == null)
+			continue;
+		let status = (obj.status != null ? "" + obj.status : "unknown");
+		if (status == "valid")
+			valid++;
+		else if (status == "captcha")
+			captcha++;
+		else if (status == "unavailable")
+			unavailable++;
+		else
+			invalid++;
+		push(hashes, {
+			index: idx,
+			status: status,
+			code: (obj.code != null ? obj.code : 0),
+			message: (obj.message != null ? "" + obj.message : ""),
+		});
+		idx++;
+	}
+	return {
+		ok: true, instance: inst.key, code: r.code,
+		total: idx, valid: valid, captcha: captcha, invalid: invalid, unavailable: unavailable,
+		hashes: hashes,
+	};
+}
+
+function mProfileImport(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let a = req.args;
+	if (type(a.link) != "string" || substr(a.link, 0, 8) != "csqtt://")
+		return { ok: false, error: "ссылка должна начинаться с csqtt://" };
+	if (length(a.link) > 4096)
+		return { ok: false, error: "ссылка слишком длинная" };
+	if (!fileInstalled(BIN))
+		return { ok: false, error: binMissingError(), code: 127 };
+	let cfg = uciShowPkg(inst.uci);
+	if (cfg == null)
+		return { ok: false, error: "не удалось прочитать конфигурацию; импорт не выполнен" };
+	// [056/PROFILE-1] Первый профиль на старой схеме: импорт сразу готовит
+	// схему 3. Хеши из ссылки сначала попадают в main (--vk-to-shared), затем
+	// переносятся в единственный профиль — иначе на схеме 2 CLI их отбросил бы.
+	// Копия «до импорта» нужна, если перенос/commit не удастся: операция
+	// должна быть целиком успешной или не изменить конфигурацию.
+	let firstProfile = serverSectionCount(cfg) == 0 && schemaNumberOf(cfg) < 3;
+	// Backup нужен только перед реальной записью: preview конфиг не меняет.
+	if (firstProfile && a.commit && !backupBeforeFirstProfile(inst))
+		return { ok: false, error: "не удалось создать резервную копию конфигурации; импорт не выполнен" };
+	let argv = [BIN, "profile", "import", a.link];
+	if (a.id != null && a.id != "") {
+		if (!isProfileId(a.id))
+			return { ok: false, error: "некорректный id (только [A-Za-z0-9_])" };
+		push(argv, "--id"); push(argv, a.id);
+	}
+	if (a.name != null && a.name != "") {
+		if (match(a.name, regexp("^[A-Za-z0-9 _.-]{1,64}$")) == null)
+			return { ok: false, error: "недопустимые символы в name" };
+		push(argv, "--name"); push(argv, a.name);
+	}
+	if (a.activate)
+		push(argv, "--activate");
+	if (a.vk_to_shared || firstProfile)
+		push(argv, "--vk-to-shared");
+	if (a.commit)
+		push(argv, "--commit");
+	push(argv, "--config"); push(argv, inst.config);
+	let r = run(argv, EXEC_TMO);
+	if (r.code != 0)
+		return { ok: false, instance: inst.key, code: r.code, error: importErrorText(r.out) };
+	// Preview (без --commit) live-конфиг не меняет: переносить нечего.
+	if (firstProfile && a.commit) {
+		let cfg2 = uciShowPkg(inst.uci);
+		let newId = "";
+		if (cfg2 != null) {
+			for (let id in cfg2) {
+				if (cfg2[id] != null && cfg2[id][".type"] == "server" && cfg[id] == null) {
+					newId = id;
+					break;
+				}
+			}
+		}
+		let fail = function(text) {
+			// Сначала откат незавершённой UCI-транзакции, затем возврат к копии
+			// «до импорта»: иначе revert вернул бы уже импортированный профиль.
+			uciRevert(inst);
+			let restored = restoreFirstProfileBackup(inst);
+			return { ok: false, instance: inst.key, code: 1,
+				error: text + (restored
+					? " Конфигурация возвращена в исходное состояние."
+					: " Исходная копия конфигурации сохранена; проверьте настройки вручную.") };
+		};
+		if (cfg2 == null || newId == "")
+			return fail("Не удалось определить импортированный профиль для переноса общих настроек.");
+		let mr = stageFirstProfileMigration(inst, cfg2, newId, null);
+		if (!mr.ok)
+			return fail("Не удалось перенести общие настройки в первый профиль.");
+		if (run([UCIBIN, "commit", inst.uci], EXEC_TMO).code != 0)
+			return fail("Не удалось сохранить перенос общих настроек.");
+	}
+	// На commit в диалоге показываем только подтверждение: полный preview
+	// содержит текст конфигурации и в интерфейсе после импорта не нужен.
+	let out = strip(r.out);
+	if (a.commit) {
+		let lines = split(replace(out, TRAIL_NL, ""), "\n");
+		out = "Профиль импортирован.";
+		for (let i = 0; i < length(lines); i++)
+			if (substr(trim(lines[i]), 0, 3) == "OK:")
+				out = trim(lines[i]);
+	}
+	return { ok: true, instance: inst.key, code: r.code, output: out };
+}
+
+// [SHARED_SETTINGS SS-3] Миграция общих настроек через проверенный скрипт
+// SS-2 (dry-run/предпросмотр — preview; запись с backup/rollback — apply).
+// Путь скрипта и аргументы — константы, ubus-ввод в shell не попадает.
+// Скрипт по контракту не печатает секретов, поэтому вывод можно показывать.
+
+function mProfileMigrateApply(req) {
+    let inst = resolveInstance(req.args.instance);
+    if (inst == null) return { ok:false, error:INSTANCE_ERR };
+    // [056/PROFILE-1] Пока профилей нет, переносить некуда: первый сервер
+    // получает общие настройки при сохранении. Отдельная миграция здесь
+    // только повторяла бы прежний замкнутый круг.
+    let cfg = uciShowPkg(inst.uci);
+    if (cfg != null && serverSectionCount(cfg) == 0)
+        return { ok:false, error:"Сначала добавьте первый сервер: общие настройки будут перенесены в него при сохранении." };
+    let version = run([BIN, "version"], EXEC_TMO);
+    if (index(version.out || "", "profile-settings-schema: 3") < 0)
+        return { ok:false, error:"Обновите управляющий пакет: перенос настроек профилей недоступен." };
+    let dir = replace(inst.config, /\/[^\/]+$/, "");
+    let r = run(["sh", "/usr/libexec/csqtt/migrate-profile-settings.sh", "--config-dir", dir, "--apply"], EXEC_TMO);
+    if (r.code == 0)
+        return { ok:true, code:0, output:strip(r.out), error:null };
+    return { ok:false, code:r.code, output:null,
+        error:"Не удалось перенести общие настройки. Исходная конфигурация не изменена." };
+}
+
+function mSharedMigratePreview(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let r = run(["sh", MIGRATE_SCRIPT, "--target", inst.config], EXEC_TMO);
+	return { ok: r.code == 0, instance: inst.key, code: r.code, apply: false, output: strip(r.out) };
+}
+
+function mSharedMigrateApply(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let r = run(["sh", MIGRATE_SCRIPT, "--target", inst.config, "--apply"], EXEC_TMO);
+	return { ok: r.code == 0, instance: inst.key, code: r.code, apply: true, output: strip(r.out) };
+}
+
+function mCaptchaList(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { error: INSTANCE_ERR, challenges: [] };
+	let st = readStatusJson(inst);
+	if (st == null)
+		return { instance: inst.key, running: false, captcha_pending: 0, challenges: [], profiles_required: [] };
+	let ch = [];
+	let list = (st.captcha_challenges != null ? st.captcha_challenges : []);
+	for (let i = 0; i < length(list); i++) {
+		let c = list[i];
+		if (c.state == "solved")
+			continue;
+		push(ch, {
+			id: c.id, profile: c.profile_id, mode: c.mode, state: c.state,
+			created_at: c.created_at, expires_at: c.expires_at,
+		});
+	}
+	let pr = [];
+	let profs = (st.profiles != null ? st.profiles : []);
+	for (let i = 0; i < length(profs); i++)
+		if (profs[i].state == "captcha_required")
+			push(pr, { id: profs[i].id, name: profs[i].name });
+	return {
+		instance: inst.key,
+		running: true,
+		captcha_pending: (st.captcha_pending != null ? st.captcha_pending : 0),
+		challenges: ch,
+		profiles_required: pr,
+	};
+}
+
+function mCaptchaCancel(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (!isId(req.args.id))
+		return { ok: false, error: "некорректный id challenge" };
+	let r = apiHttp(inst.helperPort, "POST", "/api/challenge/" + req.args.id + "/cancel");
+	if (!r.ok)
+		return { ok: false, error: r.error };
+	let body = parseJson(r.body);
+	if (r.status == 200 && body != null && body.cancelled == true)
+		return { ok: true, instance: inst.key, cancelled: true };
+	if (r.status == 404)
+		return { ok: false, error: "challenge не найден" };
+	if (r.status == 409)
+		return { ok: false, error: "challenge уже закрыт" };
+	return { ok: false, error: "helper API: HTTP " + r.status };
+}
+
+// [M6d] Прокидывает существующий M4e-эндпоинт GET /api/challenge/<id>/helper-url.
+// Ответ несёт одноразовую capability (bearer-секрет) — поэтому метод в ACL только
+// write (прецедент profile_export), а сам helper API слушает только loopback.
+function mCaptchaHelperUrl(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (!isId(req.args.id))
+		return { ok: false, error: "некорректный id challenge" };
+	let r = apiHttp(inst.helperPort, "GET", "/api/challenge/" + req.args.id + "/helper-url");
+	if (!r.ok)
+		return { ok: false, error: r.error };
+	let body = parseJson(r.body);
+	if (r.status == 200 && body != null && body.url != null)
+		return { ok: true, instance: inst.key, id: (body.id != null ? body.id : req.args.id), url: body.url };
+	if (r.status == 404)
+		return { ok: false, error: "capability-запись не найдена или просрочена" };
+	return { ok: false, error: "helper API: HTTP " + r.status };
+}
+
+function mCaptchaHelperInfo(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let r = apiHttp(inst.helperPort, "GET", "/api/challenges");
+	// [D5] Разделяем состояния: helper ВКЛЮЧЁН в настройках, ПРОЦЕСС поднят
+	// (bind прошёл), порт СЛУШАЕТСЯ и адрес ДОСТУПЕН (реальный TCP-запрос rpcd на
+	// loopback). Раньше `helper_running` считался как «status.json существует» и
+	// показывал запущенный helper, когда его не было (живой дефект 2026-10-15:
+	// `helper_running=true`, `reachable=false`, слушателя на 8443 нет).
+	let st = readStatusJson(inst);
+	let helper = (st != null && st.helper != null) ? st.helper : null;
+	let enabled = (helper != null && helper.enabled == true);
+	let running = (helper != null && helper.running == true);
+	let listen = (helper != null && helper.listen != null) ? "" + helper.listen : "";
+	let port = (helper != null && helper.port != null) ? int(helper.port) : inst.helperPort;
+	let reachable = (r.ok && r.status == 200);
+	let info = {
+		instance: inst.key,
+		// endpoint — loopback-адрес для вызовов rpcd (НЕ для браузера: URL для
+		// телефона панель строит из своего origin, см. captcha.js).
+		endpoint: "http://" + HELPER_HOST + ":" + inst.helperPort,
+		port: inst.helperPort,
+		helper_enabled: enabled,
+		helper_running: running,
+		listen: listen,
+		reachable: reachable,
+		captcha_pending: (st != null && st.captcha_pending != null ? st.captcha_pending : 0),
+	};
+	if (!reachable) {
+		if (st == null)
+			info.error = "служба CSQTT не запущена";
+		else if (!enabled)
+			info.error = "Web Helper выключен в настройках";
+		else if (!running)
+			info.error = "Web Helper включён, но не поднят (порт " + port + " не слушается)";
+		else
+			info.error = (r.error != null ? r.error : "служба Web Helper не отвечает на loopback");
+	}
+	return info;
+}
+
+
+// [063] Обновления: check — только чтение (ничего не устанавливает), install —
+// один выбранный компонент после подтверждения. Оба пути идут через
+// поставляемый установщик и фоновое задание, потому что скачивание и проверка
+// SHA-256 не укладываются в лимит одного rpcd-вызова.
+//
+// Безопасность: из браузера принимаются только component ("core"/"panel") и
+// confirm=true. Тег, линия OpenWrt, архитектура, формат IPK/APK, имена
+// файлов, URL и SHA-256 определяются на роутере установщиком. Установка
+// разрешена только по плану последней успешной проверки (UPD_PLAN): те же
+// тег/имя/SHA-256/версия, что показаны пользователю. Второй запуск
+// при незавершённом задании отклоняется (busy), у установщика есть и свой
+// lock (код 40).
+
+function updExists(path) {
+	try { return fs.access(path) == true; } catch (e) { return false; }
+}
+
+function updRead(path) {
+	try { return fs.readfile(path); } catch (e) { return null; }
+}
+
+function updWrite(path, txt) {
+	let f;
+	try {
+		f = fs.open(path, "w", 384);   // 0600: каталог задания только root
+	} catch (e) {
+		return false;
+	}
+	if (f == null)
+		return false;
+	f.write(txt);
+	f.close();
+	return true;
+}
+
+function updRemove(path) {
+	try { fs.unlink(path); } catch (e) {}
+}
+
+// pid жив, пока существует /proc/<pid>. Пустой/чужой pid — не живой.
+function updAlive(pid) {
+	if (pid == null || pid == "" || match(pid, UPD_PID_RE) == null)
+		return false;
+	return updExists("/proc/" + pid);
+}
+
+// "K:v|K:v" → объект. Значения маркеров не содержат `|`.
+function updFields(parts, from) {
+	let out = {};
+	for (let i = from; i < length(parts); i++) {
+		let p = parts[i];
+		let c = index(p, ":");
+		if (c > 0)
+			out[substr(p, 0, c)] = substr(p, c + 1);
+	}
+	return out;
+}
+
+// [AUDIT-UTF8] length()/substr() в ucode считают БАЙТЫ. Обрезка по лимиту
+// может разрезать многобайтовый символ UTF-8, и тогда сырой JSON-ответ RPC
+// перестаёт быть валидным UTF-8 (строгие клиенты отказывают). Помощники ниже
+// режут только по границе символа и ничего не добавляют: результат — префикс
+// (или хвост) исходной строки. Вход, уже содержащий некорректный UTF-8, не
+// «лечится» — это отдельный контракт: байты не заменяются на U+FFFD.
+// 0 — байт продолжения (10xxxxxx) или недопустимый ведущий байт.
+function utf8SeqLen(c) {
+	if (c < 0x80)
+		return 1;
+	if ((c & 0xE0) == 0xC0)
+		return 2;
+	if ((c & 0xF0) == 0xE0)
+		return 3;
+	if ((c & 0xF8) == 0xF0)
+		return 4;
+	return 0;
+}
+
+// Не более max байт; граница не внутри символа (префикс исходной строки).
+function utf8Prefix(txt, max) {
+	if (max <= 0)
+		return "";
+	if (length(txt) <= max)
+		return txt;
+	let j = max;
+	while (j > 0 && utf8SeqLen(ord(txt, j)) == 0)
+		j--;
+	if (j == 0)
+		return "";
+	let n = utf8SeqLen(ord(txt, j));
+	if (n > 0 && j + n <= max)
+		return substr(txt, 0, max);
+	return substr(txt, 0, j);
+}
+
+// Не более max байт с конца, начало — на границе символа.
+function utf8Tail(txt, max) {
+	if (txt == null || max <= 0)
+		return "";
+	let len = length(txt);
+	if (len <= max)
+		return txt;
+	let j = len - max;
+	while (j < len && utf8SeqLen(ord(txt, j)) == 0)
+		j++;
+	return substr(txt, j);
+}
+
+// Строгая проверка UTF-8 на уровне последовательностей: продолжения, overlong,
+// суррогаты и значения выше U+10FFFF отклоняются — так же, как строгий декодер.
+// Нужна для ранее сохранённого повреждённого файла задания: такой текст нельзя
+// отдавать в JSON, иначе сырой ответ снова станет невалидным.
+const UTF8_MASK = [0x7F, 0x1F, 0x0F, 0x07];
+const UTF8_MIN  = [0, 0x80, 0x800, 0x10000];
+function utf8Valid(txt) {
+	if (txt == null)
+		return true;
+	let n = length(txt), i = 0;
+	while (i < n) {
+		let c = ord(txt, i), k = utf8SeqLen(c);
+		if (k == 0 || i + k > n)
+			return false;
+		let cp = c & UTF8_MASK[k - 1];
+		for (let j = 1; j < k; j++) {
+			let cc = ord(txt, i + j);
+			if (cc < 0x80 || cc > 0xBF)
+				return false;
+			cp = (cp << 6) | (cc & 0x3F);
+		}
+		if (cp < UTF8_MIN[k - 1] || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+			return false;
+		i += k;
+	}
+	return true;
+}
+
+function updTail(txt, max) {
+	return utf8Tail(txt, max);
+}
+
+// Разбор маркеров установщика. Чего нет в журнале, того нет и в отчёте:
+// состояние не выдумывается.
+function updParse(txt) {
+	let out = {
+		system: null, release: null, components: {}, done: null,
+		failed: null, check_failed: null, not_published: null,
+		blocked: null, install_ok: null, rolled_back: null,
+		artifact_changed: null,
+	};
+	if (txt == null)
+		return out;
+	let lines = split(replace(txt, TRAIL_NL, ""), "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let line = lines[i];
+		if (substr(line, 0, 16) != "CSQTT_INSTALLER_")
+			continue;
+		let parts = split(substr(line, 16), "|");
+		let kind = parts[0];
+		if (kind == "CHECK_BEGIN") {
+			out.system = updFields(parts, 1);
+		} else if (kind == "CHECK_RELEASE") {
+			out.release = updFields(parts, 1);
+		} else if (kind == "CHECK") {
+			let f = updFields(parts, 1);
+			if (f.component != null)
+				out.components[f.component] = f;
+		} else if (kind == "CHECK_DONE") {
+			out.done = updFields(parts, 1);
+		} else if (kind == "CHECK_FAILED") {
+			out.check_failed = updFields(parts, 1);
+		} else if (kind == "RELEASE_NOT_PUBLISHED") {
+			out.not_published = updFields(parts, 1);
+		} else if (kind == "RELEASE_BLOCKED") {
+			out.blocked = updFields(parts, 1);
+		} else if (kind == "ARTIFACT_CHANGED") {
+			out.artifact_changed = updFields(parts, 1);
+		} else if (kind == "FAILED") {
+			// FAILED|<rc>|<сообщение, где тоже может быть |>
+			let msg = "";
+			for (let j = 2; j < length(parts); j++)
+				msg += (j > 2 ? "|" : "") + parts[j];
+			out.failed = { rc: parts[1], message: msg };
+		} else if (kind == "OK") {
+			out.install_ok = parts[1];
+		} else if (kind == "ROLLED_BACK") {
+			out.rolled_back = parts[1];
+		}
+	}
+	return out;
+}
+
+// Состояние задания в UPD_DIR. rc отсутствует, пока задание выполняется;
+// «вечный running» после kill -9/rpcd перезапуска исключён проверкой pid.
+function updJob() {
+	let st = { job: "", component: "", pid: "", rc: null, running: false, log: "", started: null };
+	let v = updRead(UPD_DIR + "/job");
+	if (v != null) st.job = strip(v);
+	v = updRead(UPD_DIR + "/component");
+	if (v != null) st.component = strip(v);
+	v = updRead(UPD_DIR + "/pid");
+	if (v != null) st.pid = strip(v);
+	v = updRead(UPD_DIR + "/started");
+	if (v != null) st.started = int(strip(v));
+	st.log = updRead(UPD_DIR + "/log") || "";
+	let rc = updRead(UPD_DIR + "/rc");
+	if (rc != null) {
+		st.rc = int(strip(rc));
+		st.running = false;
+	} else if (st.job != "") {
+		if (st.pid != "" && !updAlive(st.pid)) {
+			updWrite(UPD_DIR + "/rc", "-1\n");
+			st.rc = -1;
+			st.running = false;
+		} else {
+			st.running = true;
+		}
+	}
+	return st;
+}
+
+// Строка компонента: установленная версия из базы пакетов + данные check.
+function updComponent(marker, installedV) {
+	let c = { state: "unknown", installed: installedV || "", available: "",
+		name: "", sha256: "", bytes: 0 };
+	if (marker != null) {
+		if (marker.installed != null && marker.installed != "-")
+			c.installed = marker.installed;
+		if (marker.available != null && marker.available != "-")
+			c.available = marker.available;
+		if (marker.state != null)
+			c.state = marker.state;
+		if (marker.name != null)
+			c.name = marker.name;
+		if (marker.sha256 != null)
+			c.sha256 = marker.sha256;
+		if (marker.bytes != null && marker.bytes != "")
+			c.bytes = int(marker.bytes);
+	}
+	return c;
+}
+
+// Итог: отдельно «выпуск не настроен», «не опубликован», «нет пакета»,
+// «сеть» и «ошибка» — панель не смешивает их в одно сообщение.
+function updResult(st, m) {
+	if (st.running)
+		return "running";
+	if (m.artifact_changed != null)
+		return "artifact_changed";
+	if (m.not_published != null)
+		return "not_published";
+	if (m.blocked != null)
+		return "not_configured";
+	if (m.rolled_back != null)
+		return "rolled_back";
+	if (m.failed != null)
+		return (match(m.failed.message, UPD_NET_RE) != null) ? "network" : "error";
+	if (m.check_failed != null) {
+		if (m.check_failed.stage == "release_api")
+			return "network";
+		if (m.check_failed.stage == "download" && m.check_failed.reason == "download")
+			return "network";
+		return "error";
+	}
+	if (m.install_ok != null)
+		return "installed";
+	if (m.done != null) {
+		let no_pkg = false, update = false, unknown = false;
+		for (let k in m.components) {
+			let s = m.components[k].state;
+			if (s == "no_package" || s == "ambiguous")
+				no_pkg = true;
+			else if (s == "update")
+				update = true;
+			else if (s == "unknown")
+				unknown = true;
+		}
+		if (no_pkg)
+			return "no_package";
+		if (update)
+			return "update";
+		if (unknown)
+			return "unknown";
+		return "ok";
+	}
+	if (st.job == "")
+		return "idle";
+	if (st.rc != null && st.rc != 0)
+		return "error";
+	return "idle";
+}
+
+// Заметки выпуска: сохранённый установщиком JSON GitHub API, только `body`
+// обычным текстом (не HTML) и тег. Секретов/токенов в теле нет.
+function updNotes() {
+	let txt = updRead(UPD_DIR + "/release.json");
+	if (txt == null || txt == "")
+		return null;
+	let j = null;
+	try { j = json(txt); } catch (e) { j = null; }
+	if (j == null || type(j) != "object")
+		return null;
+	let body = (type(j.body) == "string") ? j.body : "";
+	let tag = (type(j.tag_name) == "string") ? j.tag_name : "";
+	// Повреждённый сохранённый файл (обрыв копирования и т.п.): не отдаём
+	// невалидный UTF-8 в ответ и не подменяем символы. Заметки опускаются;
+	// состояние задания не удаляется, новая проверка перезапишет release.json.
+	if (!utf8Valid(tag) || !utf8Valid(body))
+		return null;
+	if (body == "" && tag == "")
+		return null;
+	// [AUDIT-UTF8] Обрезка по границе символа: сырой ответ остаётся валидным
+	// UTF-8, текст заметок — корректным префиксом исходного.
+	body = utf8Prefix(body, UPD_NOTES_MAX);
+	return { tag: tag, body: body };
+}
+
+// Фоновый запуск установщика. Команда собирается только из констант и
+// проверенных значений (component ∈ {core,panel}, action ∈ {install,update,
+// check}, pin — значения из плана проверки); каждый argv-элемент экранирован
+// shellquote. Установщик в пакете — скрипт без бита выполнения, поэтому он
+// запускается как `sh <путь>`: это отдельные argv (без `-c`), сырой ввод в
+// shell не попадает. stdio фоновой подоболочки отвязан от rpcd, иначе popen
+// ждал бы её завершения.
+function updSpawn(job, component, action, pin, coreVersion) {
+	fs.mkdir(UPD_DIR, 0700);   // уже существует — не ошибка
+	// Новая проверка отменяет прежний план: установка по устаревшему
+	// подтверждению невозможна, пока проверка не завершится заново.
+	if (job == "check")
+		updRemove(UPD_PLAN);
+	updRemove(UPD_DIR + "/rc");
+	updRemove(UPD_DIR + "/pid");
+	updRemove(UPD_DIR + "/log");
+	updRemove(UPD_DIR + "/release.json");
+	if (!updWrite(UPD_DIR + "/job", job + "\n"))
+		return { ok: false, error: "не удалось создать каталог задания: " + UPD_DIR };
+	updWrite(UPD_DIR + "/component", component + "\n");
+	updWrite(UPD_DIR + "/started", "" + time() + "\n");
+
+	let args = [TIMEOUT, "" + UPD_TMO, "sh", UPD_INSTALLER, action, "--set", component];
+	if (coreVersion == "2.1.9" && component != "panel") {
+		push(args, "--core-version");
+		push(args, coreVersion);
+	}
+	// Привязка к проверке: ровно те значения, которые были показаны. Установщик
+	// сверит имя и SHA-256 с манифестом тега и откажет, если выпуск изменился.
+	if (pin != null) {
+		push(args, "--pin-tag");       push(args, pin.tag);
+		push(args, "--pin-name");      push(args, pin.name);
+		push(args, "--pin-sha256");    push(args, pin.sha256);
+		push(args, "--pin-version");   push(args, pin.version);
+	}
+	if (job == "install") {
+		push(args, "--yes");
+		// Панель не перезапускает службу: туннель не рвётся. Ядро
+		// перезапускает службу установщик (это и есть явный переход).
+		if (component == "panel")
+			push(args, "--no-restart");
+	}
+	if (updExists(UPD_CONF_OVERRIDE)) {
+		push(args, "--release-conf");
+		push(args, UPD_CONF_OVERRIDE);
+	}
+	let q = "";
+	for (let i = 0; i < length(args); i++)
+		q += (i > 0 ? " " : "") + shellquote("" + args[i]);
+	let inner = "CSQTT_INSTALLER_NOTES_FILE=" + shellquote(UPD_DIR + "/release.json") + " " +
+		"CSQTT_INSTALLER_PLAN_FILE=" + shellquote(UPD_PLAN) + " " + q;
+	let cmd = "(" + inner + " >" + shellquote(UPD_DIR + "/log") + " 2>&1; echo $? >" +
+		shellquote(UPD_DIR + "/rc") + ") >/dev/null 2>&1 & echo $!";
+	let p = fs.popen(cmd, "r");
+	let pid = "";
+	if (p != null) {
+		let line;
+		while ((line = p.read("line")) != null)
+			pid += line;
+		p.close();
+	}
+	pid = strip(pid);
+	if (match(pid, UPD_PID_RE) == null) {
+		updWrite(UPD_DIR + "/rc", "127\n");
+		return { ok: false, error: "не удалось запустить установщик" };
+	}
+	updWrite(UPD_DIR + "/pid", pid + "\n");
+	return { ok: true, pid: pid };
+}
+
+function mCheckUpdates(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (!updExists(UPD_INSTALLER))
+		return { ok: false, configured: false,
+			error: "установщик обновлений не найден: " + UPD_INSTALLER };
+	let component = (type(req.args.component) == "string") ? req.args.component : "";
+	if (component == "" || component == "both")
+		component = "both";
+	else if (component != "core" && component != "panel")
+		return { ok: false, error: "неизвестный компонент: " + component };
+	let st = updJob();
+	if (st.running)
+		return { ok: false, busy: true,
+			error: "уже выполняется задание обновления (" + st.job + ")" };
+	let coreVersion = req.args.core_branch || "2.5.3";
+	if (coreVersion != "2.1.9" && coreVersion != "2.5.3")
+		return { ok: false, error: "неизвестная ветка ядра" };
+	let r = updSpawn("check", component, "check", null, coreVersion);
+	if (!r.ok)
+		return { ok: false, error: r.error };
+	return { ok: true, started: true, job: "check", component: component };
+}
+
+// План последней успешной проверки. Битый/отсутствующий план = проверки нет:
+// установка по памяти браузера или по «текущему latest» запрещена.
+function updPlan() {
+	let txt = updRead(UPD_PLAN);
+	if (txt == null || txt == "")
+		return null;
+	let j = null;
+	try { j = json(txt); } catch (e) { return null; }
+	if (j == null || type(j) != "object")
+		return null;
+	if (type(j.tag) != "string" || match(j.tag, UPD_TAG_RE) == null)
+		return null;
+	if (j.components == null || type(j.components) != "object")
+		return null;
+	return j;
+}
+
+// Компонент из плана в виде, пригодном для передачи установщику.
+function updPinned(plan, component) {
+	if (plan == null)
+		return null;
+	let pc = plan.components[component];
+	if (pc == null || type(pc) != "object")
+		return null;
+	let state = (type(pc.state) == "string") ? pc.state : "";
+	if (state != "update" && state != "not_installed")
+		return null;
+	let name = (type(pc.name) == "string") ? pc.name : "";
+	let sha256 = (type(pc.sha256) == "string") ? pc.sha256 : "";
+	let version = (type(pc.available) == "string") ? pc.available : "";
+	if (match(name, UPD_NAME_RE) == null || match(sha256, UPD_SHA_RE) == null ||
+		match(version, UPD_VER_RE) == null)
+		return null;
+	return { tag: plan.tag, name: name, sha256: sha256, version: version };
+}
+
+function mInstallComponent(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	if (req.args.confirm !== true && req.args.confirm !== 1)
+		return { ok: false, error: "установка требует явного подтверждения" };
+	if (!updExists(UPD_INSTALLER))
+		return { ok: false, configured: false,
+			error: "установщик обновлений не найден: " + UPD_INSTALLER };
+	let component = (type(req.args.component) == "string") ? req.args.component : "";
+	if (component != "core" && component != "panel")
+		return { ok: false, error: "неизвестный компонент: " + component };
+	let st = updJob();
+	if (st.running)
+		return { ok: false, busy: true,
+			error: "уже выполняется задание обновления (" + st.job + ")" };
+	// Установка привязана к завершённой проверке: без плана или с компонентом,
+	// который не проверялся, запуск отклоняется — нужна новая проверка.
+	let plan = updPlan();
+	if (plan == null)
+		return { ok: false, need_check: true,
+			error: "нет завершённой проверки обновлений: повторите проверку" };
+	let pin = updPinned(plan, component);
+	if (pin == null)
+		return { ok: false, need_check: true,
+			error: "компонент " + component + " не подтверждён проверкой: повторите проверку обновлений" };
+	let coreVersion = req.args.core_branch || "2.5.3";
+	if (component == "core" && (
+		(coreVersion != "2.1.9" && coreVersion != "2.5.3") ||
+		index(pin.name, "csqtt-core-" + coreVersion + "-") != 0 &&
+		index(pin.name, "csqtt-core-" + coreVersion + "_") != 0))
+		return { ok: false, need_check: true, error: "проверьте обновления для выбранной ветки ядра" };
+	let pv = packageVersions();
+	let present = (component == "core")
+		? (pv["csqtt-core-" + coreVersion] || "") : (pv["luci-app-csqtt"] || "");
+	let legacy = (component == "core")
+		? (pv["csqtt-core-2.5.0"] || pv["csqtt-core-2.1.9"] || "") : "";
+	// 2.5.3 ещё нет, а старое ядро есть — это явный переход, а не update.
+	let action = (present != "") ? "update" : "install";
+	let r = updSpawn("install", component, action, pin, coreVersion);
+	if (!r.ok)
+		return { ok: false, error: r.error };
+	return {
+		ok: true, started: true, job: "install", component: component,
+		action: action,
+		transition: (component == "core" && present == "" && legacy != ""),
+		checked: { tag: pin.tag, name: pin.name, sha256: pin.sha256, version: pin.version },
+	};
+}
+
+function mUpdateStatus(req) {
+	let inst = resolveInstance(req.args.instance);
+	if (inst == null)
+		return { ok: false, error: INSTANCE_ERR };
+	let st = updJob();
+	let m = updParse(st.log);
+	let pv = packageVersions();
+	let coreMarker = m.components.core || null;
+	let corePackage = "csqtt-core-2.5.3";
+	if (coreMarker != null && type(coreMarker.name) == "string" &&
+	    (index(coreMarker.name, "csqtt-core-2.1.9-") == 0 ||
+	     index(coreMarker.name, "csqtt-core-2.1.9_") == 0))
+		corePackage = "csqtt-core-2.1.9";
+	let result = updResult(st, m);
+	let error = null;
+	if (result == "not_configured")
+		error = "выпуск не настроен: не заданы owner/repo/tag";
+	else if (result == "not_published")
+		error = "опубликованный выпуск не найден в GitHub Releases";
+	else if (result == "network")
+		error = "не удалось получить данные выпуска: сеть или файл недоступен";
+	else if (result == "no_package")
+		error = "в выпуске нет подходящего пакета для этой системы";
+	else if (result == "rolled_back")
+		error = "установка не удалась; прежнее состояние восстановлено, откат доступен командой из журнала";
+	else if (result == "artifact_changed")
+		error = "проверенный пакет изменился или исчез в выпуске; повторите проверку обновлений";
+	else if (result == "error")
+		error = (m.failed != null && m.failed.message != "") ? m.failed.message
+			: ((m.check_failed != null)
+				? "проверка не удалась: " + (m.check_failed.stage || "-") + "/" + (m.check_failed.reason || "-")
+				: "задание завершилось с ошибкой");
+	return {
+		ok: true,
+		instance: "main",
+		configured: updExists(UPD_INSTALLER),
+		job: (st.job != "") ? st.job : null,
+		component: (st.component != "") ? st.component : null,
+		running: st.running,
+		finished: (st.job != "" && !st.running),
+		rc: st.rc,
+		started: st.started,
+		result: result,
+		need_check: (result == "artifact_changed"),
+		release: m.release,
+		system: m.system,
+		installed: {
+			core: pv["csqtt-core-2.5.3"] || "",
+			core_219: pv["csqtt-core-2.1.9"] || "",
+			panel: pv["luci-app-csqtt"] || "",
+			legacy_core: pv["csqtt-core-2.5.0"] || pv["csqtt-core-2.1.9"] || "",
+		},
+		components: {
+			core: updComponent(coreMarker, pv[corePackage] || ""),
+			panel: updComponent(m.components.panel || null, pv["luci-app-csqtt"] || ""),
+		},
+		notes: updNotes(),
+		rollback: {
+			core: "sh " + UPD_INSTALLER + " rollback --set core",
+			panel: "sh " + UPD_INSTALLER + " rollback --set panel",
+		},
+		log: updTail(st.log, UPD_LOG_MAX),
+		error: error,
+	};
+}
+
+
+// --- сигнатура для rpcd-ucode ----------------------------------------------
+
+return {
+	csqtt: {
+		status: {
+			args: { instance: "main" },
+			call: mStatus,
+		},
+		// [063/G] Возможности Gooby по фактическому бинарнику выбранного ядра
+		// (отдельный вызов: чтение ELF не выполняется на каждом опросе статуса).
+		engine_caps: {
+			args: { instance: "main" },
+			call: mEngineCaps,
+		},
+		logs: {
+			args: { source: "file", lines: 32, grep: "", instance: "main" },
+			call: mLogs,
+		},
+		logs_clear: {
+			args: { instance: "main" },
+			call: mLogsClear,
+		},
+		service: {
+			args: { action: "", instance: "main" },
+			call: mService,
+		},
+		flood_clear: {
+			args: { instance: "main" },
+			call: mFloodClear,
+		},
+		access_check: {
+			args: { instance: "main" },
+			call: mAccessCheck,
+		},
+		turn_probe: { args: {}, call: mTurnProbe },
+		hash_recheck: {
+			args: { instance: "main" },
+			call: mHashRecheck,
+		},
+		dns_rtt: {
+			args: { instance: "main" },
+			call: mDnsRtt,
+		},
+		test_conf: {
+			args: { instance: "main" },
+			call: mTestConf,
+		},
+		diag: {
+			args: { instance: "main" },
+			call: mDiag,
+		},
+		profiles: {
+			args: { instance: "main" },
+			call: mProfiles,
+		},
+		// [P1-SECRETS] Настройки и запись профиля без UCI read/write в браузере:
+		// read-ACL uci снят, поэтому обычное чтение идёт этими safe-методами.
+		settings: {
+			args: { instance: "main" },
+			call: mSettings,
+		},
+		settings_save: {
+			args: { data: "", instance: "main" },
+			call: mSettingsSave,
+		},
+		profile_save: {
+			args: { id: "", create: false, data: "", instance: "main" },
+			call: mProfileSave,
+		},
+		profile_priority: {
+			args: { a: "", b: "", instance: "main" },
+			call: mProfilePriority,
+		},
+		profile_action: {
+			args: { action: "", id: "", instance: "main" },
+			call: mProfileAction,
+		},
+		profile_import: {
+			args: { link: "", id: "", name: "", activate: false, vk_to_shared: false, commit: false, instance: "main" },
+			call: mProfileImport,
+		},
+		profile_export: {
+			args: { id: "", instance: "main" },
+			call: mProfileExport,
+		},
+		// [r31] Локальная расшифровка ссылки 2.5.0 (HTTP-панель без WebCrypto).
+		link_decrypt: {
+			args: { link: "", instance: "main" },
+			call: mLinkDecrypt,
+		},
+		// [SECRET-VIEW] Отдельный защищённый метод просмотра сохранённого
+		// секрета (write-ACL): вызывается только по явному действию админа в
+		// редакторе профиля; в обычные ответы панели значение не входит.
+		profile_secret: {
+			args: { id: "", field: "", instance: "main" },
+			call: mProfileSecret,
+		},
+		hashes_validate: {
+			args: { id: "", vk: "", instance: "main" },
+			call: mHashesValidate,
+		},
+		shared_migrate_preview: {
+			args: { instance: "main" },
+			call: mSharedMigratePreview,
+		},
+		profile_migrate_apply: {
+            args: { instance: "main" }, call: mProfileMigrateApply,
+        },
+        shared_migrate_apply: {
+			args: { instance: "main" },
+			call: mSharedMigrateApply,
+		},
+		captcha_list: {
+			args: { instance: "main" },
+			call: mCaptchaList,
+		},
+		captcha_cancel: {
+			args: { id: "", instance: "main" },
+			call: mCaptchaCancel,
+		},
+		captcha_helper_url: {
+			args: { id: "", instance: "main" },
+			call: mCaptchaHelperUrl,
+		},
+		captcha_helper_info: {
+			args: { instance: "main" },
+			call: mCaptchaHelperInfo,
+		},
+		check_updates: {
+			args: { component: "both", instance: "main", core_branch: "2.5.3" },
+			call: mCheckUpdates,
+		},
+		update_status: {
+			args: { instance: "main" },
+			call: mUpdateStatus,
+		},
+		install_component: {
+			args: { component: "", confirm: false, instance: "main", core_branch: "2.5.3" },
+			call: mInstallComponent,
+		},
+	},
+};

@@ -1,0 +1,52 @@
+#!/bin/sh
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+# [056/r4] Обычное удаление через «Пакеты». Общие точки входа этому пакету не
+# принадлежат: останавливаем общий procd-сервис `csqtt`, затем передаём
+# управление оставшемуся ядру его же активатором — приоритет 2.1.9, затем
+# 2.5.0. /etc/config/csqtt сохраняется: это профили и секреты, панель остаётся
+# рабочей. Если оставшийся пакет есть, а активация не удалась, ошибка видна
+# менеджеру пакетов (exit 1) и в журнале (logger).
+LIVE=0
+WAS_RUNNING=0
+if command -v ubus >/dev/null 2>&1; then
+	SVCS=$(ubus -t 2 call service list '{"name":"csqtt"}' 2>/dev/null) && LIVE=1
+	case "$SVCS" in
+	*'"running": true'*) WAS_RUNNING=1 ;;
+	esac
+fi
+if [ "$LIVE" = "1" ] && [ -x /etc/init.d/csqtt ]; then
+	/etc/init.d/csqtt stop >/dev/null 2>&1 || true
+fi
+HANDOVER=
+for v in 2.1.9 2.5.0; do
+	if [ -f "/usr/lib/csqtt/core-$v/activate.sh" ]; then
+		HANDOVER=$v
+		break
+	fi
+done
+if [ -n "$HANDOVER" ]; then
+	if ! "/usr/lib/csqtt/core-$HANDOVER/activate.sh" install "$HANDOVER"; then
+		logger -t csqtt-pkg "csqtt-core-2.5.3: удаление: активация оставшегося ядра $HANDOVER не удалась" 2>/dev/null || true
+		echo "csqtt-core-2.5.3: удаление: не удалось передать управление ядру $HANDOVER" >&2
+		exit 1
+	fi
+else
+	# Последнее ядро: снимаем общие точки входа. /etc/config/csqtt остаётся —
+	# панель показывает «Ядро не установлено», профили сохраняются.
+	rm -f /usr/bin/csqtt /etc/init.d/csqtt /etc/logrotate.d/csqtt /usr/lib/csqtt/active
+	rm -f /etc/rc.d/*csqtt
+	# [056/r4] Убираем и постоянный TUN: при persistent_tun=1 интерфейс
+	# csqtt0 переживает остановку службы и остался бы без владельца. Маршруты,
+	# правила и чужие интерфейсы не трогаем — удаляется только наш csqtt0.
+	rm -f /var/run/csqtt/tun-persistent
+	if command -v ip >/dev/null 2>&1; then
+		ip link del csqtt0 2>/dev/null || true
+	fi
+fi
+if [ "$WAS_RUNNING" = "1" ] && [ -x /etc/init.d/csqtt ]; then
+	if ! /etc/init.d/csqtt start; then
+		logger -t csqtt-pkg "csqtt-core-2.5.3: служба оставшегося ядра не запустилась" 2>/dev/null || true
+		echo "csqtt-core-2.5.3: служба оставшегося ядра не запустилась; подробности: logread -e csqtt" >&2
+	fi
+fi
+exit 0

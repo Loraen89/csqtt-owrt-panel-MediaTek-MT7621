@@ -1,0 +1,66 @@
+{
+  "repository": "starkugz/csqtt-openwrt",
+  "tag": "v2.5.3",
+  "manifest_commit": "f6ee701974285fa6e984c404dcfa351d3e0556d5",
+  "assets": [
+    {
+      "component": "core253",
+      "name": "csqtt-core-2.5.3-openwrt-24.10.8-ramips-mt7621-mipsel_24kc.ipk",
+      "size": 10562888,
+      "sha256": "cd1d950d2d5fd151c519de9c98a3829ffe9b0cd31abb5e393fa854e33c786137",
+      "files": [
+        "control/control",
+        "control/postinst",
+        "control/postinst-pkg",
+        "control/postrm",
+        "control/prerm",
+        "root/usr/bin/csqtt-2.5.3",
+        "root/usr/lib/csqtt/core-2.5.3/activate.sh",
+        "root/usr/lib/csqtt/core-2.5.3/bin/csqtt-control",
+        "root/usr/lib/csqtt/core-2.5.3/etc/config/csqtt",
+        "root/usr/lib/csqtt/core-2.5.3/etc/init.d/csqtt",
+        "root/usr/lib/csqtt/core-2.5.3/etc/logrotate.d/csqtt",
+        "root/usr/share/licenses/csqtt-core-2.5.3/LICENSE",
+        "root/usr/share/licenses/csqtt-core-2.5.3/NOTICE.md",
+        "root/usr/share/licenses/csqtt-core-2.5.3/gooby/LICENSE",
+        "root/usr/share/licenses/csqtt-core-2.5.3/gooby/NOTICE"
+      ],
+      "url": "https://github.com/starkugz/csqtt-openwrt/releases/download/v2.5.3/csqtt-core-2.5.3-openwrt-24.10.8-ramips-mt7621-mipsel_24kc.ipk"
+    },
+    {
+      "component": "panel25",
+      "name": "luci-app-csqtt-2.5-openwrt-24.10.8-all.ipk",
+      "size": 172762,
+      "sha256": "d81aeee1830dcc87b8ecae425cbb243a29fe8e2bf647140220e02b5661b2daba",
+      "files": [
+        "control/control",
+        "control/postinst",
+        "control/postinst-pkg",
+        "control/prerm",
+        "root/usr/libexec/csqtt/install-csqtt.sh",
+        "root/usr/libexec/csqtt/installer-release.conf",
+        "root/usr/libexec/csqtt/migrate-profile-settings.sh",
+        "root/usr/libexec/csqtt/migrate-shared-settings.sh",
+        "root/usr/share/licenses/luci-app-csqtt/LICENSE",
+        "root/usr/share/licenses/luci-app-csqtt/NOTICE.md",
+        "root/usr/share/luci/menu.d/luci-app-csqtt.json",
+        "root/usr/share/rpcd/acl.d/luci-app-csqtt.json",
+        "root/usr/share/rpcd/ucode/csqtt",
+        "root/www/luci-static/resources/view/csqtt/about.js",
+        "root/www/luci-static/resources/view/csqtt/captcha.js",
+        "root/www/luci-static/resources/view/csqtt/i18n.js",
+        "root/www/luci-static/resources/view/csqtt/i18n.ru.json",
+        "root/www/luci-static/resources/view/csqtt/link.js",
+        "root/www/luci-static/resources/view/csqtt/logs.js",
+        "root/www/luci-static/resources/view/csqtt/profiles.js",
+        "root/www/luci-static/resources/view/csqtt/qr.js",
+        "root/www/luci-static/resources/view/csqtt/settings.js",
+        "root/www/luci-static/resources/view/csqtt/status.js",
+        "root/www/luci-static/resources/view/csqtt/support.js",
+        "root/www/luci-static/resources/view/csqtt/theme.js",
+        "root/www/luci-static/resources/view/csqtt/vk_token.js"
+      ],
+      "url": "https://github.com/starkugz/csqtt-openwrt/releases/download/v2.5.3/luci-app-csqtt-2.5-openwrt-24.10.8-all.ipk"
+    }
+  ]
+}

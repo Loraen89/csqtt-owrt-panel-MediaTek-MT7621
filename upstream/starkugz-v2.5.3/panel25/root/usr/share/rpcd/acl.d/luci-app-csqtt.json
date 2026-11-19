@@ -1,0 +1,51 @@
+{
+	"luci-app-csqtt": {
+		"description": "CSQTT tunnel: read status/logs, manage service/profiles/captcha (single instance)",
+		"read": {
+			"ubus": {
+				"csqtt": [
+					"status",
+					"engine_caps",
+					"logs",
+					"test_conf",
+					"diag",
+					"profiles",
+					"settings",
+					"hashes_validate",
+					"shared_migrate_preview",
+					"captcha_list",
+					"captcha_helper_info",
+					"check_updates",
+					"update_status"
+				]
+			}
+		},
+		"write": {
+			"ubus": {
+				"csqtt": [
+					"logs_clear",
+					"service",
+					"flood_clear",
+					"access_check",
+					"hash_recheck",
+					"dns_rtt",
+					"turn_probe",
+					"test_conf",
+					"profile_action",
+					"profile_import",
+					"profile_export",
+					"profile_secret",
+					"link_decrypt",
+					"profile_save",
+					"profile_priority",
+					"settings_save",
+					"shared_migrate_apply",
+					"captcha_cancel",
+					"captcha_helper_url",
+					"profile_migrate_apply",
+					"install_component"
+				]
+			}
+		}
+	}
+}

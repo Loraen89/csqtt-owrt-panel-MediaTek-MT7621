@@ -1,0 +1,30 @@
+#!/bin/sh
+[ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+# [056/r4] Установка рядом с другим ядром (2.1.9/2.5.0) и обновление самого
+# 2.5.3. Имя procd-сервиса общее (`csqtt`), поэтому прежний управляющий
+# процесс останавливается, если активно ДРУГОЕ ядро: иначе он продолжил бы
+# работать со своими файлами и новый инстанс не поднялся бы. Обновление уже
+# активного 2.5.3 службу не трогает — лишнего перерыва связи нет.
+LIVE=0
+if command -v ubus >/dev/null 2>&1 && ubus -t 2 call system board >/dev/null 2>&1; then
+	LIVE=1
+fi
+RESTART=0
+if [ "$(cat /usr/lib/csqtt/active 2>/dev/null)" != "2.5.3" ] &&
+   [ "$LIVE" = "1" ] && [ -x /etc/init.d/csqtt ]; then
+	/etc/init.d/csqtt stop >/dev/null 2>&1 || true
+	RESTART=1
+fi
+if ! /usr/lib/csqtt/core-2.5.3/activate.sh install 2.5.3; then
+	logger -t csqtt-pkg "csqtt-core-2.5.3: не удалось активировать общее управление" 2>/dev/null || true
+	echo "csqtt-core-2.5.3: не удалось активировать /usr/bin/csqtt и /etc/init.d/csqtt" >&2
+	exit 1
+fi
+if [ "$RESTART" = "1" ]; then
+	if ! /etc/init.d/csqtt start; then
+		logger -t csqtt-pkg "csqtt-core-2.5.3: служба не запустилась после переключения на 2.5.3" 2>/dev/null || true
+		echo "csqtt-core-2.5.3: служба не запустилась после переключения на 2.5.3; подробности: logread -e csqtt" >&2
+	fi
+fi
+exit 0
