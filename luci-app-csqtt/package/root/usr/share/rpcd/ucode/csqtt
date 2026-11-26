@@ -5,6 +5,8 @@ import * as fs from "fs";
 const BIN = "/usr/bin/csqtt-core";
 const BIN_250 = "/usr/libexec/csqtt/csqtt-core-2.5.0";
 const BIN_219 = "/usr/libexec/csqtt/csqtt-core-2.1.9";
+const BIN_253 = "/usr/libexec/csqtt/csqtt-control-2.5.3";
+const ENGINE_253 = "/usr/bin/csqtt-2.5.3";
 const INIT = "/etc/init.d/csqtt";
 const UCI = "/sbin/uci";
 const LOGREAD = "/sbin/logread";
@@ -16,7 +18,7 @@ const IFNAME_RE = regexp("^[A-Za-z0-9_.-]{1,15}$");
 const PROFILE_RE = regexp("^[A-Za-z0-9_]+$");
 const TRAIL_NL = regexp("[\r\n]+$");
 const PROFILE_SAFE = ["name", "enabled", "priority", "peer", "core_version", "workers",
-	"obfs", "turn_transport", "captcha_mode", "fingerprint", "note", "device_id"];
+	"obfs", "turn_transport", "captcha_mode", "fingerprint", "note", "device_id", "gooby_mode"];
 
 function shellquote(value) {
 	return "'" + replace("" + value, "'", "'\\''") + "'";
@@ -187,8 +189,13 @@ function safeProfiles(cfg, runtimeActive, running) {
 		}
 		profile.core_version = profileValue(cfg, id, "core_version",
 			mainValue(cfg, "core_version", "auto"));
+		let bin = resolveProfileBin(cfg, id);
+		profile.core_available = fileExists(bin) && (bin != BIN_253 || fileExists(ENGINE_253));
+		profile.core_error = profile.core_available ? "" : "Selected core is not installed";
 		if (section.enabled == "0")
 			profile.state = "disabled";
+		else if (!profile.core_available)
+			profile.state = "failed";
 		else if (running && id == runtimeActive)
 			profile.state = "active";
 		else if (configuredProfile(section))
@@ -202,7 +209,7 @@ function safeProfiles(cfg, runtimeActive, running) {
 
 function resolveProfileBin(cfg, active) {
 	// Приоритет как в init.d resolve_core: ядро выбранного профиля, затем
-	// csqtt.main.core_version, затем 2.5.0 -> 2.1.9 -> legacy.
+	// csqtt.main.core_version, затем 2.5.3 -> 2.5.1 -> 2.1.9 -> legacy.
 	let pref = active != ""
 		? profileValue(cfg, active, "core_version", mainValue(cfg, "core_version", "auto"))
 		: mainValue(cfg, "core_version", "auto");
@@ -210,6 +217,10 @@ function resolveProfileBin(cfg, active) {
 		return BIN_219;
 	if (pref == "2.5.0" || pref == "2.5.1")
 		return BIN_250;
+	if (pref == "2.5.3")
+		return BIN_253;
+	if (fileExists(BIN_253) && fileExists(ENGINE_253))
+		return BIN_253;
 	if (fileExists(BIN_250))
 		return BIN_250;
 	if (fileExists(BIN_219))
@@ -223,13 +234,20 @@ function resolveBin() {
 }
 
 function binaryVersion() {
-	let result = run([resolveBin(), "--version"]);
+	let bin = resolveBin();
+	if (bin == BIN_253 && !fileExists(ENGINE_253)) return "unavailable";
+	let result = run([bin, bin == BIN_253 ? "version" : "--version"]);
 	return result.code == 0 ? clean(result.out) : "unavailable";
+}
+
+function coreVersion(cfg, active) {
+	let bin = resolveProfileBin(cfg, active);
+	return bin == BIN_219 ? "2.1.9" : bin == BIN_253 ? "2.5.3" : "2.5.1";
 }
 
 function processInfo() {
 	let pid = "";
-	let names = [ "csqtt-core-2.5.0", "csqtt-core-2.1.9", "csqtt-core" ];
+	let names = [ "csqtt-2.5.3", "csqtt-control-2.5.3", "csqtt-core-2.5.0", "csqtt-core-2.1.9", "csqtt-core" ];
 	for (let i = 0; i < length(names); i++) {
 		let name = names[i];
 		let result = run(["/bin/pidof", name]);
@@ -366,11 +384,12 @@ function statusObject() {
 		pid: proc.pid,
 		enabled: main != null && main.enabled == "1",
 		boot_enabled: run([INIT, "enabled"]).code == 0,
-		configured: active != "" && (mainValue(cfg, "vk_hash_mode", "manual") == "auto_js"
-			? mainValue(cfg, "vk_js_token", "") != "" : mainValue(cfg, "vk", "") != ""),
+		configured: active != "" && (profileValue(cfg, active, "vk_hash_mode", "manual") == "auto_js"
+			? profileValue(cfg, active, "vk_js_token", "") != "" : profileValue(cfg, active, "vk", "") != ""),
 		interface: ifname,
 		interface_up: interfaceUp,
 		binary_ok: status.version != "unavailable",
+		core_version: coreVersion(cfg, active),
 		status: status
 	};
 }
@@ -453,15 +472,15 @@ function configurationReport() {
 	let active = chooseProfile(cfg);
 	if (active == "") { addCheck(checks, "Server profile", "fail", "no enabled profile with peer and password"); failures++; }
 	else addCheck(checks, "Server profile", "ok", active);
-	let hashMode = mainValue(cfg, "vk_hash_mode", "manual");
-	let vkReady = hashMode == "auto_js" ? mainValue(cfg, "vk_js_token", "") != "" : mainValue(cfg, "vk", "") != "";
+	let hashMode = profileValue(cfg, active, "vk_hash_mode", "manual");
+	let vkReady = hashMode == "auto_js" ? profileValue(cfg, active, "vk_js_token", "") != "" : profileValue(cfg, active, "vk", "") != "";
 	if (vkReady) addCheck(checks, "VK credentials", "ok", hashMode);
 	else { addCheck(checks, "VK credentials", "fail", hashMode == "auto_js" ? "VK JS token is empty" : "VK hashes are empty"); failures++; }
 	if (mainValue(cfg, "failover", "0") == "1") { addCheck(checks, "Runtime failover", "warn", "the 2.5.0 single-profile core applies priority only on service start"); warnings++; }
 	else addCheck(checks, "Runtime failover", "ok", "disabled; profile selection is deterministic");
 	addCheck(checks, "Network isolation", "ok", "the package does not modify firewall, routes or system DNS");
 	return { ok: failures == 0, code: failures > 0 ? 2 : (warnings > 0 ? 1 : 0),
-		report: { checks: checks, compatibility: "MediaTek MT7621 / mipsel_24kc / cores 2.1.9+2.5.1" } };
+		report: { checks: checks, compatibility: "MediaTek MT7621 / mipsel_24kc / cores 2.1.9+2.5.1+2.5.3" } };
 }
 
 function mTestConf(req) {
@@ -564,14 +583,24 @@ function mProfileExport(req) {
 		return { ok: false, error: "invalid profile id" };
 	let section = cfg[id];
 	if (!configuredProfile(section)) return { ok: false, error: "profile has no peer or password" };
-	let link = "csqtt://connect?v=2&host=" + percentEncode(section.peer) +
-		"&password=" + percentEncode(section.password) +
-		"&workers=" + percentEncode(profileValue(cfg, id, "workers", "9")) +
+	let endpoint = match(section.peer, regexp("^\\[([^\\]]+)\\]:([0-9]+)$"));
+	if (endpoint == null) endpoint = match(section.peer, regexp("^([^:]+):([0-9]+)$"));
+	if (endpoint == null || int(endpoint[2]) < 1 || int(endpoint[2]) > 65535)
+		return { ok: false, error: "invalid profile endpoint" };
+	let core = coreVersion(cfg, id);
+	let link = "csqtt://connect?v=2&host=" + percentEncode(endpoint[1]) +
+		"&peer=" + endpoint[2] + "&password=" + percentEncode(section.password) +
+		"&workers=" + percentEncode(profileValue(cfg, id, "workers", "18")) +
 		"&obfs=" + percentEncode(profileValue(cfg, id, "obfs", "unified")) +
 		"&turn_transport=" + percentEncode(profileValue(cfg, id, "turn_transport", "udp"));
-	let vk = mainValue(cfg, "vk", "");
-	if (vk != "") link += "&hashes=" + percentEncode(vk);
-	let core = resolveProfileBin(cfg, id) == BIN_219 ? "2.1.9" : "2.5.0";
+	let vk = profileValue(cfg, id, "vk", "");
+	if (profileValue(cfg, id, "vk_hash_mode", "manual") == "manual" && vk != "") {
+		let hashes = split(vk, regexp("[,\\s]+")), encoded = [];
+		for (let hash in hashes) if (hash != "") push(encoded, percentEncode(hash));
+		link += "&hashes=" + join("+", encoded);
+	}
+	// VK access tokens are account credentials and are never exported implicitly.
+
 	return { ok: true, instance: "main", core_version: core,
 		link: core == "2.1.9" ? link : null,
 		payload: core == "2.1.9" ? null : link };
@@ -596,10 +625,11 @@ function mProfileImport(req) {
 	// Encrypted links belong to the 2.5.x protocol. Never decode them with the
 	// currently selected binary: a previous 2.1.9 selection must not make a
 	// valid encrypted link fail or silently pick the wrong core.
-	let decoded = run([BIN_250, "--decode-link", link]);
+	let decoded = fileExists(BIN_250) ? run([BIN_250, "--decode-link", link]) : run([BIN_253, "link-decrypt", link]);
 	if (decoded.code != 0)
 		return { ok: false, error: "link authentication or decryption failed" };
 	let payload = clean(decoded.out);
+	if (substr(lc(payload), 0, 8) == "csqtt://") payload = substr(payload, 8);
 	if (payload == "" || length(payload) > 8192 ||
 		(index(lc(payload), "host=") < 0 && index(lc(payload), "connect?") < 0) ||
 		index(lc(payload), "password=") < 0)
@@ -625,7 +655,8 @@ function mHashesValidate(req) {
 	if (length(vk) > 8192) return { ok: false, error: "VK hash list is too long" };
 	let fingerprint = mainValue(cfg, "fingerprint", "chrome");
 	let clientIds = mainValue(cfg, "client_ids", "");
-	let result = run([resolveBin(), "--validate-vk-hashes", "--vk", vk, "--fingerprint", fingerprint, "--client-ids", clientIds]);
+	let bin = resolveBin();
+	let result = run([bin == BIN_253 ? ENGINE_253 : bin, "--validate-vk-hashes", "--vk", vk, "--fingerprint", fingerprint, "--client-ids", clientIds]);
 	let hashes = [], valid = 0, captcha = 0, invalid = 0, unavailable = 0;
 	let lines = split(result.out, "\n");
 	for (let i = 0; i < length(lines); i++) {
@@ -724,7 +755,10 @@ function mCaptchaHelperInfo(req) {
 }
 
 function mSelfTest(req) {
-	let result = run([resolveBin(), "--self-test"]);
+	let bin = resolveBin();
+	let result = bin == BIN_253
+		? run([bin, "doctor", "--pre-launch", "--config", "/etc/config/csqtt", "--status-path", STATUS_PATH])
+		: run([bin, "--self-test"]);
 	return { ok: result.code == 0, code: result.code, output: clean(result.out) };
 }
 

@@ -31,7 +31,7 @@ else
 fi
 
 PACKAGES=''
-for package in luci-app-csqtt csqtt-core-2.1.9 csqtt-core-2.5.0 luci-app-csqtt-netis csqtt-core; do
+for package in luci-app-csqtt csqtt-core-2.1.9 csqtt-core-2.5.0 csqtt-core-2.5.3 luci-app-csqtt-netis csqtt-core; do
 	if [ "$PKG_MGR" = 'apk' ]; then
 		if apk info -e "$package" >/dev/null 2>&1; then
 			PACKAGES="$PACKAGES $package"

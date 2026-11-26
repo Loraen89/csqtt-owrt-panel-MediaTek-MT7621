@@ -30,6 +30,8 @@ usage() {
   --core 2.5.0    установить панель + ядро 2.5.0 (бинарник 2.5.1)
   --core both     установить панель + оба ядра
   --ref REF       качать dist/ из ветки/тега (по умолчанию — последний релиз)
+  --core 2.5.3    установить панель + ядро 2.5.3
+  --core all      установить панель + все три ядра
   --dry-run       показать план без установки
   --help          показать эту справку
 
@@ -58,13 +60,17 @@ choose_core() {
 Выберите устанавливаемое ядро:
   1) 2.1.9
   2) 2.5.0 (пакет содержит исправленный бинарник 2.5.1) [по умолчанию]
-  3) оба ядра
+  3) ядра 2.1.9 и 2.5.1
+  4) ядро 2.5.3
+  5) все три ядра
 EOF
 		printf 'Ваш выбор [2]: '
 		read -r answer || answer=''
 		case "$answer" in
 			1|2.1.9) CORE_CHOICE='2.1.9' ;;
 			3|both|оба) CORE_CHOICE='both' ;;
+			4|2.5.3) CORE_CHOICE='2.5.3' ;;
+			5|all) CORE_CHOICE='all' ;;
 			''|2|2.5.0|2.5.1) CORE_CHOICE='2.5.0' ;;
 			*) echo "Недопустимый выбор: $answer" >&2; exit 2 ;;
 		esac
@@ -75,7 +81,7 @@ EOF
 
 choose_core
 case "$CORE_CHOICE" in
-	2.1.9|2.5.0|both) ;;
+	2.1.9|2.5.0|2.5.3|both|all) ;;
 	2.5.1) CORE_CHOICE='2.5.0' ;;
 	*) echo "Недопустимое ядро: $CORE_CHOICE" >&2; exit 2 ;;
 esac
@@ -94,10 +100,12 @@ if [ "$PKG_MGR" = 'apk' ]; then
 	PANEL_NAME='luci-app-csqtt-2.0-openwrt-25.12.apk'
 	CORE219_NAME='csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk'
 	CORE251_NAME='csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk'
+	CORE253_NAME='csqtt-core-2.5.3-openwrt-25.12-mipsel_24kc.apk'
 else
 	PANEL_NAME='luci-app-csqtt-2.0-openwrt-24.10.ipk'
 	CORE219_NAME='csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk'
 	CORE251_NAME='csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk'
+	CORE253_NAME='csqtt-core-2.5.3-openwrt-24.10-mipsel_24kc.ipk'
 fi
 echo "Пакетный менеджер: $PKG_MGR"
 command -v sha256sum >/dev/null 2>&1 || {
@@ -153,6 +161,7 @@ if [ -n "$REF" ]; then
 	URLS="$BASE/$PANEL_NAME?ref=$REF
 $BASE/$CORE219_NAME?ref=$REF
 $BASE/$CORE251_NAME?ref=$REF
+$BASE/$CORE253_NAME?ref=$REF
 $BASE/$SUMS_NAME?ref=$REF"
 else
 	echo 'Запрашиваю последний релиз GitHub...'
@@ -177,12 +186,14 @@ else
 fi
 
 WANTED="$PANEL_NAME $SUMS_NAME"
-if [ "$CORE_CHOICE" = '2.1.9' ] || [ "$CORE_CHOICE" = 'both' ]; then
+if [ "$CORE_CHOICE" = '2.1.9' ] || [ "$CORE_CHOICE" = 'both' ] || [ "$CORE_CHOICE" = 'all' ]; then
 	WANTED="$WANTED $CORE219_NAME"
 fi
-if [ "$CORE_CHOICE" != '2.1.9' ]; then
+if [ "$CORE_CHOICE" = '2.5.0' ] || [ "$CORE_CHOICE" = 'both' ] || [ "$CORE_CHOICE" = 'all' ]; then
 	WANTED="$WANTED $CORE251_NAME"
 fi
+
+if [ "$CORE_CHOICE" = '2.5.3' ] || [ "$CORE_CHOICE" = 'all' ]; then WANTED="$WANTED $CORE253_NAME"; fi
 
 for name in $WANTED; do
 	if [ -n "$REF" ]; then
@@ -219,12 +230,14 @@ if command -v sha256sum >/dev/null 2>&1 && [ -f "$WORKDIR/$SUMS_NAME" ]; then
 fi
 
 PACKAGES="$WORKDIR/$PANEL_NAME"
-if [ "$CORE_CHOICE" = '2.1.9' ] || [ "$CORE_CHOICE" = 'both' ]; then
+if [ "$CORE_CHOICE" = '2.1.9' ] || [ "$CORE_CHOICE" = 'both' ] || [ "$CORE_CHOICE" = 'all' ]; then
 	PACKAGES="$PACKAGES $WORKDIR/$CORE219_NAME"
 fi
-if [ "$CORE_CHOICE" != '2.1.9' ]; then
+if [ "$CORE_CHOICE" = '2.5.0' ] || [ "$CORE_CHOICE" = 'both' ] || [ "$CORE_CHOICE" = 'all' ]; then
 	PACKAGES="$PACKAGES $WORKDIR/$CORE251_NAME"
 fi
+
+if [ "$CORE_CHOICE" = '2.5.3' ] || [ "$CORE_CHOICE" = 'all' ]; then PACKAGES="$PACKAGES $WORKDIR/$CORE253_NAME"; fi
 
 echo "Будут установлены: $PACKAGES"
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -234,7 +247,7 @@ fi
 
 # shellcheck disable=SC2086
 if [ "$PKG_MGR" = 'apk' ]; then
-	apk add --allow-untrusted $PACKAGES
+	apk add --allow-untrusted --force-non-repository $PACKAGES
 else
 	opkg install $PACKAGES || {
 		echo 'opkg не смог установить пакеты. Проверьте доступ к фидам OpenWrt 24.10:' >&2
@@ -246,7 +259,9 @@ fi
 case "$CORE_CHOICE" in
 	2.1.9) SELECTED_CORE='2.1.9' ;;
 	2.5.0) SELECTED_CORE='2.5.0' ;;
-	both) SELECTED_CORE='auto' ;;
+	both) SELECTED_CORE='2.5.1' ;;
+	2.5.3) SELECTED_CORE='2.5.3' ;;
+	all) SELECTED_CORE='auto' ;;
 esac
 if command -v uci >/dev/null 2>&1; then
 	uci -q set "csqtt.main.core_version=$SELECTED_CORE"
@@ -260,4 +275,4 @@ rm -rf /tmp/luci-indexcache* 2>/dev/null || true
 echo 'Установка завершена.'
 echo 'Панель: LuCI -> Службы -> CSQTT-PANEL v2.0.'
 echo "Режим ядра: $SELECTED_CORE"
-echo "Если установлены оба: uci set csqtt.main.core_version='2.1.9|2.5.0|auto'"
+echo "Если установлены оба: uci set csqtt.main.core_version='2.1.9|2.5.1|2.5.3|auto'"

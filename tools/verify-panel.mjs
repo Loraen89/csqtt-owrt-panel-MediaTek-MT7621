@@ -118,6 +118,7 @@ for (const [filename, pkgname, corePath, expectedBinary] of [
 	['luci-app-csqtt-2.0-openwrt-25.12.apk', 'luci-app-csqtt', null, null],
 	['csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk', 'csqtt-core-2.1.9', 'usr/libexec/csqtt/csqtt-core-2.1.9', '../core219/dist/csqtt-core-2.1.9-mt7621-r1-mipsel_24kc'],
 	['csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk', 'csqtt-core-2.5.0', 'usr/libexec/csqtt/csqtt-core-2.5.0', '../core251/dist/csqtt-core-2.5.1-mt7621-r1-mipsel_24kc'],
+	['csqtt-core-2.5.3-openwrt-25.12-mipsel_24kc.apk', 'csqtt-core-2.5.3', 'usr/bin/csqtt-2.5.3', '../core253/dist/csqtt-2.5.3'],
 ]) {
 	const parts = splitStreams(fs.readFileSync(path.join(DIST, filename)));
 	if (parts.length !== 2) throw new Error('Invalid APK streams: ' + filename);
@@ -149,7 +150,7 @@ if (ipkNames.every((name) => fs.existsSync(path.join(DIST, name)))) {
 		while (pos < buf.length) {
 			const header = buf.subarray(pos, pos + 60);
 			const name = header.subarray(0, 16).toString().trimEnd();
-			const size = parseInt(header.subarray(48, 58).toString().trim(), 8);
+			const size = parseInt(header.subarray(48, 58).toString().trim(), 10);
 			entries.push([name, buf.subarray(pos + 60, pos + 60 + size)]);
 			pos += 60 + size + (size % 2);
 		}
@@ -175,6 +176,7 @@ if (ipkNames.every((name) => fs.existsSync(path.join(DIST, name)))) {
 		['luci-app-csqtt-2.0-openwrt-24.10.ipk', 'luci-app-csqtt', null, null],
 		['csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk', 'csqtt-core-2.1.9', './usr/libexec/csqtt/csqtt-core-2.1.9', '../core219/dist/csqtt-core-2.1.9-mt7621-r1-mipsel_24kc'],
 		['csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk', 'csqtt-core-2.5.0', './usr/libexec/csqtt/csqtt-core-2.5.0', '../core251/dist/csqtt-core-2.5.1-mt7621-r1-mipsel_24kc'],
+		['csqtt-core-2.5.3-openwrt-24.10-mipsel_24kc.ipk', 'csqtt-core-2.5.3', './usr/bin/csqtt-2.5.3', '../core253/dist/csqtt-2.5.3'],
 	]) {
 		const arEntries = parseAr(fs.readFileSync(path.join(DIST, filename)));
 		const names = arEntries.map(([name]) => name);

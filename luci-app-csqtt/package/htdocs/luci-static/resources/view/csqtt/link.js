@@ -1,4 +1,4 @@
-'use strict';'require baseclass';'require rpc';var CIPHER_KEY_SEED='csqtt-chiper-key';var IV_BYTES=12;var TAG_BYTES=16;var MIN_BYTES=IV_BYTES+TAG_BYTES;var MAX_PAYLOAD_CHARS=4096;var BASE64URL_RE=/^[A-Za-z0-9_-]+$/;var aesKeyPromise=null;var hmacKeyPromise=null;var callLinkDecrypt=rpc.declare({object:'csqtt',method:'link_decrypt',params:['link']});function subtle(){return(typeof crypto!=='undefined'&&crypto&&crypto.subtle)?crypto.subtle:null;}
+'use strict';'require baseclass';'require rpc';var CIPHER_KEY_SEED='csqtt-chiper-key';var IV_BYTES=12;var TAG_BYTES=16;var MIN_BYTES=IV_BYTES+TAG_BYTES;var MAX_PAYLOAD_CHARS=16384;var BASE64URL_RE=/^[A-Za-z0-9_-]+$/;var aesKeyPromise=null;var hmacKeyPromise=null;var callLinkDecrypt=rpc.declare({object:'csqtt',method:'link_decrypt',params:['link']});function subtle(){return(typeof crypto!=='undefined'&&crypto&&crypto.subtle)?crypto.subtle:null;}
 function secureContext(){return(typeof window!=='undefined'&&window.isSecureContext===true);}
 function available(){return secureContext()&&!!subtle();}
 function utf8Encode(text){return new TextEncoder().encode(text);}
@@ -40,4 +40,36 @@ return res;if(res&&res.error==='no-webcrypto')
 return decryptRemote(raw);return res;});}
 function encrypt(link){var raw=String(link==null?'':link).trim();if(!raw||!available())
 return Promise.resolve(null);var payload=raw.replace(/^csqtt:\/\//i,''),data=utf8Encode(payload);return Promise.all([aesKey(),hmacKey()]).then(function(keys){return subtle().sign('HMAC',keys[1],data).then(function(mac){var iv=new Uint8Array(mac).slice(0,IV_BYTES);return subtle().encrypt({name:'AES-GCM',iv:iv,tagLength:128},keys[0],data).then(function(ciphertext){var combined=new Uint8Array(IV_BYTES+ciphertext.byteLength);combined.set(iv,0);combined.set(new Uint8Array(ciphertext),IV_BYTES);return'csqtt://'+base64UrlEncode(combined);});});}).catch(function(){return null;});}
-return baseclass.extend({__name__:'CsqttLink',available:available,secureContext:secureContext,decode:decode,decryptRemote:decryptRemote,resolve:resolve,encrypt:encrypt,normalizePayload:normalizePayload,});
+// Keep raw hash separators until each hash has been percent-decoded.
+function parseProfile(payload) {
+try {
+var query=String(payload||'').trim().replace(/^csqtt:\/\//i,'').replace(/^connect\?/i,'').replace(/^\?/,''),params=Object.create(null),raw=Object.create(null);
+query.replace(/&amp;/g,'&').split(/[&;]/).forEach(function(part){
+if(!part)return;
+var eq=part.indexOf('=');if(eq<1)throw new Error('query');
+var key=decodeURIComponent(part.slice(0,eq));
+if(Object.prototype.hasOwnProperty.call(params,key))throw new Error('duplicate');
+raw[key]=part.slice(eq+1);params[key]=decodeURIComponent(raw[key]).trim();
+});
+if(params.v&&params.v!=='2')return null;
+var host=params.host||'',port=params.peer||'';
+// Read links exported by older panels (host=host:port) as well as v2 links.
+if(!port){var endpoint=host.match(/^\[([^\]]+)\]:(\d+)$/)||host.match(/^([^:]+):(\d+)$/);if(!endpoint)return null;host=endpoint[1];port=endpoint[2];}
+host=host.replace(/^\[([^\]]+)\]$/,'$1');
+if(!host||/[\s\/@?#&=]/.test(host)||!/^\d+$/.test(port)||Number(port)<1||Number(port)>65535||!params.password||/\s/.test(params.password))return null;
+var hashes=[];
+if(raw.hashes!=null){hashes=raw.hashes.split('+').map(function(hash){return decodeURIComponent(hash).replace(/^https?:\/\/(?:m\.)?vk\.(?:com|ru)\/call\/join\//i,'').replace(/[?#].*$/,'');});
+// Older panels encoded a comma-separated list as one query value.
+if(hashes.length===1&&hashes[0].indexOf(',')>=0)hashes=hashes[0].split(',');
+if(hashes.length>6||hashes.some(function(hash){return hash.length<16||/\s/.test(hash);})||new Set(hashes).size!==hashes.length)return null;}
+var token=params.token||'';if(raw.token!=null&&(!token||token.length>4096||!/^[A-Za-z0-9._=-]+$/.test(token)))return null;
+if(hashes.length&&token)return null;
+var workers=params.power||params.workers||'';
+if(workers&&(!/^\d+$/.test(workers)||Number(workers)<1))return null;
+if(workers){if(params.power)workers=String(Math.min(100,Math.max(10,Number(workers))));else if(Number(workers)>126)return null;}
+if(params.obfs&&['audio','video','unified'].indexOf(params.obfs)<0)return null;
+if(params.turn_transport&&['udp','tcp','tcp_tls','tcp-tls','tcp/tls'].indexOf(params.turn_transport)<0)return null;
+return {host:host,port:String(Number(port)),peer:(host.indexOf(':')>=0?'['+host+']':host)+':'+Number(port),password:params.password,workers:workers,obfs:params.obfs||'',turn_transport:params.turn_transport||'',hashes:hashes,token:token,raw_params:params};
+}catch(e){return null;}
+}
+return baseclass.extend({__name__:'CsqttLink',available:available,secureContext:secureContext,decode:decode,decryptRemote:decryptRemote,resolve:resolve,encrypt:encrypt,normalizePayload:normalizePayload,parseProfile:parseProfile,});
