@@ -123,7 +123,6 @@
  "Delete profile \"%s\"? The UCI section will be removed.": "Удалить профиль «%s»? Секция UCI будет удалена.",
  "Details": "Подробности",
  "Device ID": "Идентификатор устройства",
-
  "Device ID: ": "ID устройства: ",
  "The first profile gets a random Device ID; further profiles reuse it so running connections are not affected.": "Первый профиль получает случайный идентификатор устройства; последующие профили используют его же, чтобы не ронять работающие соединения.",
  "randomly generated": "создаётся случайно",
@@ -582,5 +581,18 @@
  "— not set —": "— не задано —",
  "— unchanged —": "— не изменять —",
  "“Credentials obtained” means the call link was recognized and anonymous credentials were issued; it does NOT confirm traffic transfer.": "«Данные подключения получены» означает, что ссылка звонка распознана и выданы данные анонимного подключения. Это не подтверждает передачу трафика.",
- "Encrypted export requires HTTPS or a browser with WebCrypto. No incompatible open link was generated.": "Для экспорта зашифрованной ссылки нужен HTTPS и браузер с WebCrypto. Несовместимая открытая ссылка не создана."
+ "Encrypted export requires HTTPS or a browser with WebCrypto. No incompatible open link was generated.": "Для экспорта зашифрованной ссылки нужен HTTPS и браузер с WebCrypto. Несовместимая открытая ссылка не создана.",
+ "Select the core that matches the server protocol. Link encryption does not identify the core version.": "Выберите ядро, соответствующее протоколу сервера. По шифрованию ссылки нельзя определить версию ядра.",
+ "Import a connect?v=2 link or an encrypted CSQTT link. Hashes and tokens stay in this profile. Select the server core explicitly.": "Импорт ссылки connect?v=2 или зашифрованной ссылки CSQTT. Хеши и токен сохраняются в этом профиле. Ядро сервера выбирается явно.",
+ "Workers are rounded down by the selected core: groups of 9 for 2.1.9, groups of 10 for 2.5.x (up to 100). Active workers are reported by the running tunnel.": "Потоки округляются вниз выбранным ядром: группы по 9 для 2.1.9, по 10 для 2.5.x (до 100). Активные потоки сообщает работающий туннель.",
+ "SRTP key mode for 2.5.x. Core 2.1.9 does not use this option.": "Режим ключей SRTP для 2.5.x. Ядро 2.1.9 этот параметр не использует.",
+ "Built-in Gooby (2.5.3, TCP/TLS only)": "Встроенный Gooby (2.5.3, только TCP/TLS)",
+ "Only core 2.5.3 supports built-in Gooby. Select TCP/TLS on the Tunnel & VK page.": "Встроенный Gooby поддерживается только ядром 2.5.3. Выберите TCP/TLS на странице «Туннель и VK».",
+ "Empty = use shared settings.": "Пусто — использовать общие настройки.",
+ "Global mode clears this profile’s VK overrides. Empty secret fields keep stored values.": "Общий режим удаляет индивидуальные настройки VK этого профиля. Пустые поля секретов сохраняют прежние значения.",
+ "Invalid worker count for the selected core.": "Недопустимое количество потоков для выбранного ядра.",
+ "Gooby requires core 2.5.3 and TURN TCP/TLS.": "Для Gooby нужны ядро 2.5.3 и TURN TCP/TLS.",
+ "Invalid VK token.": "Недопустимый VK-токен.",
+ "Selected core is not installed": "Выбранное ядро не установлено",
+ "Profile ID already exists. Choose a different ID.": "Профиль с таким ID уже существует. Выберите другой ID."
 }

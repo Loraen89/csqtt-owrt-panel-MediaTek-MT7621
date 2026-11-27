@@ -31,6 +31,15 @@ jobs:
             *) prerelease=false; latest=true ;;
           esac
           title="CSQTT-PANEL v2.0 — ${tag#v2.0-mt7621-}"
+          notes=README.md
+          case "$tag" in
+            v2.0-mt7621-r14*)
+              title="$title — БЕЗ ИСПЫТАНИЙ НА РОУТЕРЕ"
+              notes=docs/RELEASE-r14.md
+              prerelease=true
+              latest=false
+              ;;
+          esac
           set -- \
             dist/csqtt-core-2.1.9-openwrt-25.12-mipsel_24kc.apk \
             dist/csqtt-core-2.5.1-openwrt-25.12-mipsel_24kc.apk \
@@ -38,17 +47,20 @@ jobs:
             dist/csqtt-core-2.1.9-openwrt-24.10-mipsel_24kc.ipk \
             dist/csqtt-core-2.5.1-openwrt-24.10-mipsel_24kc.ipk \
             dist/luci-app-csqtt-2.0-openwrt-24.10.ipk \
+            dist/csqtt-core-2.5.3-openwrt-25.12-mipsel_24kc.apk \
+            dist/csqtt-core-2.5.3-openwrt-24.10-mipsel_24kc.ipk \
             dist/SHA256SUMS \
             install-from-github.sh install-csqtt.sh uninstall-csqtt.sh \
-            README.md LICENSE NOTICE.md SECURITY.md
+            README.md LICENSE NOTICE.md SECURITY.md \
+            docs/RELEASE-r14.md docs/UPSTREAM-r14.md
 
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$@" --clobber
             gh release edit "$tag" \
               --draft=false --prerelease="$prerelease" --latest="$latest" \
-              --title "$title" --notes-file README.md
+              --title "$title" --notes-file "$notes"
           else
             gh release create "$tag" "$@" \
               --prerelease="$prerelease" --latest="$latest" \
-              --title "$title" --notes-file README.md
+              --title "$title" --notes-file "$notes"
           fi

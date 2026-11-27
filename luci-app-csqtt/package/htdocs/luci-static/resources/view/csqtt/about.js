@@ -44,7 +44,7 @@ return view.extend({
 			E('style', {}, CSS),
 			E('div', { class: 'csqtt-brand' }, [
 				E('span', { class: 'csqtt-brand-name' }, 'CSQTT-PANEL v2.0'),
-				E('span', { class: 'csqtt-brand-tag' }, 'полный интерфейс LuCI, ядра 2.1.9 / 2.5.1')
+				E('span', { class: 'csqtt-brand-tag' }, 'полный интерфейс LuCI, ядра 2.1.9 / 2.5.1 / 2.5.3')
 			]),
 			E('div', { class: 'csqtt-section' }, [
 				E('h3', {}, _('Versions')),
@@ -52,7 +52,7 @@ return view.extend({
 			]),
 			E('div', { class: 'csqtt-section' }, [
 				E('h3', {}, 'Совместимость'),
-				E('p', { class: 'csqtt-note' }, 'Открытые ссылки csqtt://connect используют ядро 2.1.9, зашифрованные — 2.5.1. Ядро сохраняется в профиле и выбирается перед запуском службы. Транспорт TURN по умолчанию — UDP.')
+				E('p', { class: 'csqtt-note' }, 'Ядро 2.1.9, 2.5.1 или 2.5.3 выбирается явно в профиле и при импорте. Шифрование ссылки не определяет протокол сервера. Старое значение UCI 2.5.0 означает ядро 2.5.1. Транспорт TURN по умолчанию — UDP.')
 			]),
 			E('div', { class: 'csqtt-section' }, [
 				E('h3', {}, 'Безопасность сети'),

@@ -99,11 +99,11 @@ const IPK_MTIME = 1793577600;
 function arHeader(name, size, mode = 0o100644) {
 	const header = Buffer.alloc(60);
 	header.write(name.padEnd(16, ' '), 0, 16, 'ascii');
-	header.write(IPK_MTIME.toString(8).padStart(11, '0') + ' ', 16, 12, 'ascii');
+	header.write(String(IPK_MTIME).padEnd(12, ' '), 16, 12, 'ascii');
 	header.write('0'.padEnd(6, ' '), 28, 6, 'ascii');
 	header.write('0'.padEnd(6, ' '), 34, 6, 'ascii');
 	header.write(mode.toString(8).padStart(7, '0') + ' ', 40, 8, 'ascii');
-	header.write(size.toString(8).padStart(10, '0') + ' ', 48, 10, 'ascii');
+	header.write(String(size).padEnd(10, ' '), 48, 10, 'ascii');
 	header.write('`\n', 58, 2, 'ascii');
 	return header;
 }
@@ -219,6 +219,24 @@ function licenseFiles(pkgname) {
 const core219 = readBinary('core219/dist/csqtt-core-2.1.9-mt7621-r1-mipsel_24kc');
 // --- РЇРґСЂРѕ 2.5.1 (РїР°РєРµС‚ csqtt-core-2.5.0) ---
 const core251 = readBinary('core251/dist/csqtt-core-2.5.1-mt7621-r1-mipsel_24kc');
+const core253Files = [
+	['usr/bin/csqtt-2.5.3', readBinary('core253/dist/csqtt-2.5.3'), 0o755],
+	['usr/libexec/csqtt/csqtt-control-2.5.3', readBinary('core253/dist/csqtt-control-2.5.3'), 0o755],
+	...['LICENSE', 'NOTICE.md', 'gooby/LICENSE', 'gooby/NOTICE'].map(name => [
+		'usr/share/licenses/csqtt-core-2.5.3/' + name, readBinary('core253/dist/licenses/' + name), 0o644
+	]),
+];
+for (const [format, release] of [['apk', '25.12'], ['ipk', '24.10']]) {
+	const spec = {
+		pkgname: 'csqtt-core-2.5.3', pkgver: '2.5.3-r11',
+		pkgdesc: 'CSQTT 2.5.3 transport and supervisor for MediaTek MT7621 (starkugz v2.5.3)',
+		arch: 'mipsel_24kc', depends: ['libc', 'libgcc1', 'kmod-tun'], files: core253Files,
+	};
+	const data = format === 'apk' ? buildApk(spec) : buildIpk(spec);
+	const output = `csqtt-core-2.5.3-openwrt-${release}-mipsel_24kc.${format}`;
+	fs.writeFileSync(path.join(outputDirectory, output), data);
+	results.push({ output, bytes: data.length, sha256: crypto.createHash('sha256').update(data).digest('hex') });
+}
 
 for (const spec of [
 	{
@@ -260,8 +278,8 @@ exit 0
 `);
 const panelApk = buildApk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r13',
-	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
+	pkgver: '2.0-r14',
+	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1 / 2.5.3)',
 	arch: 'noarch',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
 	files: panelFiles,
@@ -304,8 +322,8 @@ for (const spec of [
 
 const panelIpk = buildIpk({
 	pkgname: 'luci-app-csqtt',
-	pkgver: '2.0-r13',
-	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1)',
+	pkgver: '2.0-r14',
+	pkgdesc: 'CSQTT-PANEL v2.0: LuCI panel for MediaTek MT7621 (CSQTT 2.1.9 / 2.5.1 / 2.5.3)',
 	arch: 'all',
 	depends: ['luci-base', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-uci', 'curl'],
 	files: panelFiles,

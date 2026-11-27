@@ -12,16 +12,22 @@ EOF
 chmod 755 "$sandbox/bin/gh"
 export PATH="$sandbox/bin:$PATH"
 for existing in 0 1; do
- for suffix in r10-rc1 r11-alpha1 r11-beta2 r11; do
+ for suffix in r10-rc1 r11-alpha1 r11-beta2 r11 r14-rc1 r14; do
   export VIEW_EXIT=$existing CALL_LOG="$sandbox/calls.log" GITHUB_REF_NAME="v2.0-mt7621-$suffix"
   : >"$CALL_LOG"
   sh "$step"
   case "$suffix" in
-   *-rc*|*-alpha*|*-beta*) expected='--prerelease=true --latest=false';;
+   r14*|*-rc*|*-alpha*|*-beta*) expected='--prerelease=true --latest=false';;
    *) expected='--prerelease=false --latest=true';;
   esac
   grep -q -- "$expected" "$CALL_LOG" || { echo "FAIL: release flags for $suffix"; exit 1; }
-  grep -q -- '--notes-file README.md' "$CALL_LOG" || { echo 'FAIL: installation notes missing'; exit 1; }
+  case "$suffix" in
+   r14*)
+    grep -q -- '--notes-file docs/RELEASE-r14.md' "$CALL_LOG" || { echo 'FAIL: r14 release notes missing'; exit 1; }
+    grep -q 'БЕЗ ИСПЫТАНИЙ НА РОУТЕРЕ' "$CALL_LOG" || { echo 'FAIL: r14 hardware warning missing'; exit 1; }
+    ;;
+   *) grep -q -- '--notes-file README.md' "$CALL_LOG" || { echo 'FAIL: installation notes missing'; exit 1; };;
+  esac
   if [ "$existing" = 0 ]; then
    grep -q 'release upload' "$CALL_LOG"
    grep -q 'release edit' "$CALL_LOG"

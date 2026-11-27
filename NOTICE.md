@@ -20,6 +20,11 @@ community-патчем 02 и адаптацией MT7621. Внутреннее �
 
 OpenWrt, LuCI и Rust-зависимости имеют собственные лицензии. Исходники и
 Cargo.lock ядер находятся в `core219/source/` и `core251/source/`.
+Ядро 2.5.3 и supervisor импортированы без изменений из starkugz/csqtt-openwrt
+v2.5.3, пакет MT7621 2.5.3-r10 (переупаковка r11). В пакете сохраняются
+исходные LICENSE/NOTICE.md и лицензия/NOTICE Gooby (Apache 2.0).
+Upstream-снимок соответствует CSQTTR 84a2ce84dd4ac0716ceabd1b9a9ae455e6e86806.
+Происхождение и SHA-256 приведены в docs/UPSTREAM-r14.md.
 VK, OK и TURN — внешние сервисы с отдельными условиями использования.
 
 При распространении сохраняйте LICENSE, этот NOTICE и исходные уведомления
