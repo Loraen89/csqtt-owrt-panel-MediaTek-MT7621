@@ -594,5 +594,10 @@
  "Gooby requires core 2.5.3 and TURN TCP/TLS.": "Для Gooby нужны ядро 2.5.3 и TURN TCP/TLS.",
  "Invalid VK token.": "Недопустимый VK-токен.",
  "Selected core is not installed": "Выбранное ядро не установлено",
- "Profile ID already exists. Choose a different ID.": "Профиль с таким ID уже существует. Выберите другой ID."
+ "Profile ID already exists. Choose a different ID.": "Профиль с таким ID уже существует. Выберите другой ID.",
+ "Core": "Ядро",
+ "Off": "Выкл.",
+ "Profile settings override the shared tunnel and VK defaults.": "Настройки профиля имеют приоритет над общими настройками туннеля и VK.",
+ "Edit the server, core, tunnel and VK settings of this profile.": "Изменить сервер, ядро, параметры туннеля и VK этого профиля.",
+ "Advanced settings": "Дополнительные настройки"
 }
